@@ -1,0 +1,15 @@
+# Network key - never commit (copy secrets.example.h -> secrets.h)
+secrets.h
+# Build output / host test binaries
+build/
+*.o
+*.elf
+*.bin
+test_proto
+sim_mesh
+test_battery
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+__pycache__/

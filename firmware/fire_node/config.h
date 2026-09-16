@@ -2,41 +2,34 @@
 #define CONFIG_H
 
 // ---------------------------------------------------------------------------
-// Pin assignments (Heltec WiFi LoRa 32 V4.3 / ESP32-S3) - see project
-// memory / pin table for the full rationale behind each choice.
+// Pin assignments - final designed board revision (Heltec WiFi LoRa 32 V4.3
+// / ESP32-S3). WiFi and status-LED ("light") functionality are not wired on
+// this board - only Heltec base, piezo buzzer, boost converter, smoke
+// sensor and temp sensor are populated.
 // ---------------------------------------------------------------------------
-#define PIN_I2C_SDA      17   // shared OLED + BMP280 bus
-#define PIN_I2C_SCL      18
-#define PIN_WIFI_SWITCH  15   // active-LOW, INPUT_PULLUP - toggles the WiFi AP on/off
-#define PIN_BUZZER       16   // active HIGH
-#define PIN_BOOST_EN     48   // LOW = boost converter (5V dust sensor rail) ON
-#define PIN_DUST_LED     47   // GP2Y1010 LED drive (active LOW pulse)
-#define PIN_DUST_ADC     3    // GP2Y1010 Vo, post 10k/20k divider + 0.1uF filter cap
-#define PIN_WIFI_LED     4    // WiFi status LED
-#define PIN_FIRE_LED     6    // HIGH = fire, LOW = clear
-#define PIN_VBAT         1    // ADC1_CH0, battery voltage via onboard divider
-#define PIN_ADC_CTRL     37   // HIGH = enable VBAT divider
-#define PIN_VEXT_CTRL    36   // LOW = Vext (3.3V rail: OLED + BMP280) powered on
-#define PIN_USB_SENSE    33   // 10k/10k divider off the board's 5V pin - detects USB power present
-// (GPIO5 tried first for this - input reads weren't reliable despite the
-// prior "output driver only" finding, moved to GPIO33: same J3 header group
-// as GPIO36/37, which are already proven working as plain GPIOs on this
-// board despite their alternate octal-SPI naming in the datasheet.)
+#define PIN_I2C_SDA       17   // shared OLED + BMP280 bus
+#define PIN_I2C_SCL       18
+#define PIN_BUZZER        15   // active HIGH (moved from GPIO16 on the prior board revision)
+// GPIO16 is the nominal WiFi-switch position on this board but is not
+// wired - WiFi isn't implemented in this build.
+#define PIN_BOOST_EN      48   // LOW = boost converter (5V dust sensor rail) ON
+#define PIN_DUST_LED      47   // GP2Y1010 LED drive (active LOW pulse)
+#define PIN_DUST_ADC      6    // GP2Y1010 Vo (moved from GPIO3 on the prior board revision)
+#define PIN_FIVE_V_SENSE  3    // 10k/10k divider off the board's 5V line - decides boost enable
+#define PIN_VBAT          1    // ADC1_CH0, battery voltage via onboard divider
+#define PIN_ADC_CTRL      37   // HIGH = enable VBAT divider
+#define PIN_VEXT_CTRL     36   // LOW = Vext (3.3V rail: OLED + BMP280) powered on
 
 // ---------------------------------------------------------------------------
-// Node identity / WiFi access point / dashboard
+// Node identity
 // ---------------------------------------------------------------------------
 #define NODE_ID          "node1"
-#define WIFI_AP_SSID     "FireNode1"
-#define WIFI_AP_PASSWORD "firealarm123"   // CALIBRATE: change before real deployment - WPA2, 8+ chars
-#define WEB_SERVER_PORT  80
 
 // ---------------------------------------------------------------------------
 // General timing
 // ---------------------------------------------------------------------------
 const unsigned long BUZZ_INTERVAL_MS    = 1000;  // one chirp per second
 const unsigned long BUZZ_ON_MS          = 150;   // chirp length
-const unsigned long FIRE_LED_FLASH_MS   = 100;   // rapid flash toggle rate
 const unsigned long DUST_SAMPLE_MS      = 1000;  // normal decision cadence
 const unsigned long DUST_FAST_SAMPLE_MS = 250;   // faster decision cadence once elevated/alarm active
 const unsigned long DISPLAY_REFRESH_MS  = 250;
@@ -71,10 +64,11 @@ const unsigned int BASELINE_SAMPLE_COUNT = 30;    // pulses (at DUST_PULSE_CYCLE
 
 // ---------------------------------------------------------------------------
 // Smoke detection tuning
-// CALIBRATE: real match-smoke test measured delta=388 at "significant"
-// smoke, with early signs starting around delta=20 above baseline.
-// SMOKE_TRIGGER_DELTA (300) is close to that ceiling - worth tightening
-// once you've done more real-smoke testing.
+// CALIBRATE: real match-smoke test on the prior board revision measured
+// delta=388 at "significant" smoke, with early signs starting around
+// delta=20 above baseline. SMOKE_TRIGGER_DELTA (300) is close to that
+// ceiling - worth tightening once you've done real-smoke testing on this
+// board revision.
 // ---------------------------------------------------------------------------
 const int SMOKE_TRIGGER_DELTA    = 300;   // delta that counts as confirmed smoke
 const int SMOKE_CLEAR_MARGIN     = 100;   // hysteresis: must drop back to baseline+this to "clear"
@@ -82,25 +76,26 @@ const int EARLY_WARNING_DELTA    = 20;    // delta that speeds up polling to DUS
 const int REQUIRED_HIGH_READINGS = 3;     // consecutive highs before the alarm latches
 const int REQUIRED_LOW_READINGS  = 5;     // consecutive lows before auto-clear (if not latched)
 
-// true  = alarm stays on until "clear" is sent (serial or dashboard) - real-alarm style
+// true  = alarm stays on until "clear" is sent (serial) - real-alarm style
 // false = alarm auto-clears once smoke reading sustained-drops back to baseline
 const bool LATCH_ALARM = true;
 
 // ---------------------------------------------------------------------------
 // Battery voltage
-// Theoretical 390k/100k divider ratio (4.9) didn't match reality - measured
-// against a multimeter on this board: corrected multiplier is ~5.36 (likely
-// ESP32-S3 ADC gain error rather than the divider itself). Re-check if you
-// swap boards or want to confirm it holds linearly across the battery range.
+// Theoretical 390k/100k divider ratio (4.9) didn't match reality on the
+// prior board revision - measured against a multimeter: corrected
+// multiplier was ~5.36. Re-verify against a multimeter on this board
+// revision before trusting it - divider components/tolerances may differ.
 // ---------------------------------------------------------------------------
 const float VBAT_DIVIDER_RATIO = 5.36;
 
 // The dust ADC reading's sensitivity to VBAT sag isn't a straight 1:1 ratio -
-// comparing two real sag/recovery events, raw counts moved roughly 3x more
-// (in percentage terms) than VBAT itself did. That fits an LDO-dropout-style
-// nonlinearity better than simple proportional reference drift. Tune this
-// exponent against more real data if it's still over/under-correcting -
-// see applyVbatCorrection() in dust_sensor.cpp.
+// on the prior board revision, comparing two real sag/recovery events, raw
+// counts moved roughly 3x more (in percentage terms) than VBAT itself did.
+// That fits an LDO-dropout-style nonlinearity better than simple
+// proportional reference drift. Tune this exponent against real data on
+// this board revision if it's over/under-correcting - see
+// applyVbatCorrection() in dust_sensor.cpp.
 const float VBAT_CORRECTION_EXPONENT = 3.0;
 
 // Auto-recalibration: if VBAT drifts at least this far from the last
@@ -117,5 +112,39 @@ const float VBAT_EMPTY         = 3.3;   // volts = 0% (Table 3.2 min battery vol
 const float VBAT_FULL          = 4.2;   // volts = 100%
 const float ADC_REF_VOLTAGE    = 3.3;
 const int   ADC_RESOLUTION     = 4095;  // 12-bit ADC
+
+// ---------------------------------------------------------------------------
+// 5V line sense (PIN_FIVE_V_SENSE): a 10k/10k divider off the board's 5V
+// line feeds GPIO3, halving it into ADC range. Read once at boot to decide
+// whether to enable the boost converter - if external 5V is already
+// present (USB or wall), the battery-fed boost must not also be enabled
+// onto the same rail. Also flags a low-voltage warning if 5V is present but
+// weak, since a sagging supply might not meet the Sharp sensor's ~4.5V
+// minimum even with the boost switched off.
+//   raw pin voltage <  FIVE_V_PRESENT_THRESHOLD  -> no external 5V, boost ON
+//   raw pin voltage >= FIVE_V_PRESENT_THRESHOLD  -> external 5V present, boost OFF
+//   ...and if also < FIVE_V_LOW_WARNING_THRESHOLD -> flagged LOW, shown on OLED
+// See dustSensorInit() in dust_sensor.cpp.
+// ---------------------------------------------------------------------------
+const float FIVE_V_PRESENT_THRESHOLD     = 0.5;   // raw pin volts (~1V actual rail floor)
+const float FIVE_V_LOW_WARNING_THRESHOLD = 2.1;   // raw pin volts (~4.2V actual rail)
+
+// ESP32-S3 ADC gain error - same issue VBAT_DIVIDER_RATIO corrects for.
+// Multimeter measured 2.384V on GPIO3 while the raw-count-based calculation
+// gave 2.26V (a factor of ~1.055 low). Re-measure and adjust if you swap
+// boards, since this is chip-specific, not a fixed property of the divider.
+const float FIVE_V_SENSE_CAL_RATIO = 1.055;
+
+// The divider taps the 5V pin ahead of the Schottky diode in that path, so
+// the displayed/logged rail voltage (fiveVRailVoltage in dust_sensor.cpp)
+// subtracts this typical forward drop to reflect what actually reaches the
+// rail after the diode, not the raw incoming voltage. A Schottky's forward
+// drop isn't fixed - it rises with load current: measured ~0.2V lightly
+// loaded, ~0.34V under real operating current (4.97V in -> 4.63V on the
+// rail). This is a fixed mid-range approximation, not a true per-load
+// model - fine since it only affects the displayed/logged estimate, not
+// the boost-enable or low-voltage-warning decisions (those compare against
+// the pin voltage before this subtraction).
+const float SCHOTTKY_DIODE_DROP_V = 0.27;
 
 #endif

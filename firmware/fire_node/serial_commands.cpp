@@ -7,8 +7,8 @@
 
 // ---------------------------------------------------------------------------
 // Serial commands: fire (test trigger) / clear (reset latch) / baseline
-// (recalibrate). Mirrors the same actions available from the web dashboard
-// (see wifi_dashboard.cpp) - kept in sync manually since they're small.
+// (recalibrate). No WiFi dashboard on this board revision, so this is the
+// only interface for testing/calibration.
 // ---------------------------------------------------------------------------
 void handleSerialCommand() {
   if (!Serial.available()) return;

@@ -1,15 +1,25 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdint.h>
+
 // ---------------------------------------------------------------------------
-// Pin assignments - V3 board revision (Heltec WiFi LoRa 32 V4.3 / ESP32-S3).
-// This is the standard pin config for all future boards. Adds the alarm LED,
-// WiFi LED and WiFi switch on top of the V2 final-board pinout.
+// Pin assignments - V3/V4 board revision (Heltec WiFi LoRa 32 V4.3 / ESP32-S3).
+// This is the standard pin config for all future boards.
+//
+// Pins the Heltec radio driver owns on the V4.3 with the KCT8103L front-end
+// (do not use for anything else): GPIO8 NSS, 9 SCK, 10 MOSI, 11 MISO, 12 RST,
+// 13 BUSY, 14 DIO1, 2 CSD (FEM enable), 7 PA power, and 5 CTX (TX/RX path
+// select - the driver writes it on every TX/RX switch).
 // ---------------------------------------------------------------------------
 #define PIN_I2C_SDA       17   // shared OLED + BMP280 bus
 #define PIN_I2C_SCL       18
 #define PIN_BUZZER        15   // active HIGH
-#define PIN_FIRE_LED      5    // alarm LED - anode on the GPIO, HIGH = on
+#define PIN_FIRE_LED      -1   // alarm LED - anode on the GPIO, HIGH = on. DISABLED (-1) in V4:
+                               // GPIO5 is the radio's PA_CTX pin (TX/RX switch) and the LoRa
+                               // driver drives it constantly, so an LED there both glitches and
+                               // can put the receiver on the wrong RF path. Move the LED to a
+                               // free pin (GPIO38-42 are unused on this board) and set it here.
 #define PIN_WIFI_LED      4    // WiFi status LED - anode on the GPIO, HIGH = on
 #define PIN_WIFI_SWITCH   16   // grounds the pin when ON (active-LOW). NO external pull-up -
                                // firmware must use INPUT_PULLUP (see wifiDashboardInit()).
@@ -24,8 +34,13 @@
 // ---------------------------------------------------------------------------
 // Node identity / WiFi access point / dashboard
 // ---------------------------------------------------------------------------
-#define NODE_ID          "node1"
-#define WIFI_AP_SSID     "FireNode1"
+#define FN_XSTR(x) #x
+#define FN_STR(x)  FN_XSTR(x)
+#ifndef NODE_ADDR
+#define NODE_ADDR        1                      // UNIQUE per fire node (1..99). Command node = 100.
+#endif
+#define NODE_ID          "node" FN_STR(NODE_ADDR)
+#define WIFI_AP_SSID     "FireNode" FN_STR(NODE_ADDR)
 #define WIFI_AP_PASSWORD "firealarm123"   // CALIBRATE: change before real deployment - WPA2, 8+ chars
 #define WEB_SERVER_PORT  80
 
@@ -151,5 +166,66 @@ const float FIVE_V_SENSE_CAL_RATIO = 1.055;
 // the boost-enable or low-voltage-warning decisions (those compare against
 // the pin voltage before this subtraction).
 const float SCHOTTKY_DIODE_DROP_V = 0.27;
+
+// ---------------------------------------------------------------------------
+// LoRa radio (Heltec framework, SX1262 + KCT8103L front-end). All nodes,
+// including the command node, must use identical values here.
+// ---------------------------------------------------------------------------
+#define LORA_FREQ_HZ        921000000UL   // custom channel inside AU915 (915-928 MHz), away from LoRaWAN/Meshtastic defaults
+#define LORA_BW_INDEX       0             // 0 = 125 kHz
+#define LORA_SF             9             // spreading factor (SF9 ~ 190 ms airtime for these packets)
+#define LORA_CR_INDEX       1             // 1 = 4/5
+#define LORA_PREAMBLE_LEN   8
+#define LORA_SYNC_WORD      0x5A          // PHY-level network filter (NOT security). Avoid 0x12 (private) and 0x34 (LoRaWAN public)
+
+// SX1262 output setting; the KCT8103L adds roughly +6 dB, so 22 dBm here is
+// about 28 dBm at the antenna connector. Limit is 30 dBm EIRP (AU915) and
+// that INCLUDES antenna gain. 10 is a safe bench value; raise it for
+// deployment only after working out your antenna's gain. Never transmit
+// without an antenna attached.
+#define LORA_TX_POWER_DBM   10
+#define LORA_TX_POWER_MAX   20            // hard cap, enforced at compile time below
+
+// Listen-before-talk: defer a transmit if the channel RSSI is above this.
+const int16_t  LBT_RSSI_DBM          = -95;
+const uint8_t  LBT_MAX_DEFERS        = 6;
+const uint16_t LBT_BACKOFF_MIN_MS    = 30;
+const uint16_t LBT_BACKOFF_MAX_MS    = 150;
+
+// ---------------------------------------------------------------------------
+// Mesh behaviour
+// ---------------------------------------------------------------------------
+const unsigned long FIRE_REANNOUNCE_MS = 5000;    // origin repeats FIRE this often while its episode is active
+// Re-announce / repeat timers get random jitter so two nodes that cannot hear
+// each other (hidden nodes) don't collide at a shared neighbour every time.
+const unsigned long FIRE_JITTER_MS     = 750;     // FIRE_REANNOUNCE_MS +/- this
+const unsigned long CTRL_JITTER_MS     = 400;     // CTRL_REPEAT_MS +/- this
+const unsigned long HB_INTERVAL_MS     = 30000;   // heartbeat period (suppressed while any alarm is active)
+const unsigned long PEER_STALE_MS      = 100000;  // no heartbeat for this long -> peer shown as UNKNOWN
+const unsigned long CTRL_REPEAT_MS     = 1500;    // CLEAR / SILENCE are sent several times for reliability
+const uint8_t       CTRL_REPEATS       = 3;
+const unsigned long REARM_HOLDOFF_MS   = 60000;   // after our own episode is cleared, no new local episode for this long
+
+const uint8_t  FIRE_TTL  = 5;
+const uint8_t  CTRL_TTL  = 5;
+const uint8_t  HB_TTL    = 3;
+
+// Relay timing: a relay waits longer the stronger the packet was heard
+// (near nodes back off, far nodes go first - pushes the flood outward) plus
+// random jitter. Spread must exceed one packet's airtime (~190 ms) to avoid
+// relays colliding.
+const uint16_t RELAY_MAX_DELAY_MS = 600;
+const uint16_t RELAY_JITTER_MS    = 120;
+const int16_t  RELAY_RSSI_FAR     = -115;   // heard this weakly  -> relay immediately
+const int16_t  RELAY_RSSI_NEAR    = -40;    // heard this strongly -> relay after RELAY_MAX_DELAY_MS
+
+#define MESH_MAX_PEERS   16
+#define MESH_MAX_ALARMS  4
+#define MESH_MAX_CTRL    6
+#define MESH_TX_QUEUE    8
+
+#if LORA_TX_POWER_DBM > LORA_TX_POWER_MAX
+#error "LORA_TX_POWER_DBM exceeds LORA_TX_POWER_MAX - check EIRP limit before raising the cap"
+#endif
 
 #endif

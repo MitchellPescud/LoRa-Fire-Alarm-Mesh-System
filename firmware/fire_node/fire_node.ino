@@ -1,37 +1,49 @@
 /*
   ============================================================================
-  Fire Alarm Node - V3 (WiFi + dashboard, no LoRa yet)
-  Board: Heltec WiFi LoRa 32 V4.3 (ESP32-S3 + SX1262)
+  Fire Alarm Node - V4 (LoRa mesh + WiFi dashboard)
+  Board: Heltec WiFi LoRa 32 V4.3 (ESP32-S3 + SX1262 + KCT8103L front-end)
   ============================================================================
 
-  V3 build for the new boards: V2's final-board sensing (5V-line sense,
-  Sharp GP2Y1010AU0F, BMP280, buzzer, boost converter) plus the WiFi soft-AP
-  dashboard, WiFi switch/LED and flashing alarm LED. LoRa mesh networking is
-  deliberately NOT included yet.
+  V3 (sensing, alarm, WiFi dashboard) plus the LoRa mesh: every node
+  transmits, receives and relays, with no gateway. This sketch is for the
+  fire alarm nodes; the PC-attached command node is a separate, stripped
+  sketch that shares mesh_proto.*, secrets.h and the LoRa/mesh settings in
+  config.h.
 
-  Split across multiple files - this .ino is just setup()/loop(); the actual
-  logic lives in:
-    config.h            - all pin assignments and tunable constants
+  Per-node setup (config.h): set NODE_ADDR to a unique value (1..99) before
+  flashing each alarm. secrets.h (the pre-shared HMAC key) must be identical on
+  every node.
+
+  Arduino IDE (Heltec ESP32 board package): Board = WiFi LoRa 32(V4); Tools ->
+  LoRa FEM must be KCT8103L (defines USE_KCT8103L_PA); USB CDC On Boot enabled;
+  Flash 16MB; PSRAM OPI.
+
+  Files:
+    config.h            - pins, radio settings, mesh timing, node address
+    secrets.h           - pre-shared network key (do not share)
     state.h / state.cpp - shared cross-module state
-    dust_sensor.*       - GP2Y1010AU0F pulse train, calibration, smoke
-                          evaluation, 5V-line sense -> boost enable
-    alarm.*             - buzzer + alarm LED state machine, trigger/clear
-    battery.*           - VBAT read -> percentage
-    temp_sensor.*       - BMP280
-    display.*           - OLED
-    serial_commands.*   - fire / clear / baseline over Serial
-    wifi_dashboard.*    - WiFi AP + web dashboard (served when the WiFi switch is on)
+    mesh_proto.*        - wire format, HMAC tag, replay window (pure logic; PC
+                          tests in tests/)
+    mesh_hmac.cpp       - ESP32 HMAC-SHA256 backend (mbedtls) + key loading
+    mesh_radio.*        - Heltec radio driver wrapper: RX, TX queue, LBT
+    mesh.*              - flooding/relay, alarm episodes, CLEAR/SILENCE,
+                          heartbeats, peer table, status
+    dust_sensor.*       - GP2Y1010AU0F pulse train, calibration, smoke eval,
+                          5V-line sense -> boost enable
+    alarm.*             - buzzer + alarm LED, local trigger/clear/silence
+    battery.*, temp_sensor.*, display.*
+    serial_commands.*   - fire / clear / silence / mesh / baseline over Serial
+    wifi_dashboard.*    - WiFi AP + web dashboard (WiFi switch on GPIO16)
 
-  V3 pins (see config.h): GPIO4 WiFi LED, GPIO5 alarm LED (both anode on the
-  GPIO), GPIO15 buzzer, GPIO16 WiFi switch (grounds when ON, INPUT_PULLUP),
-  GPIO3 5V sense, GPIO6 dust ADC.
+  Alarm LED: disabled by default (PIN_FIRE_LED = -1) because GPIO5 is the
+  radio's TX/RX path pin - see config.h.
 
-  Serial commands (115200 baud, "Newline" line ending) and dashboard both
-  support: fire (test trigger) / clear (reset latch) / baseline (recalibrate)
-
-  WiFi: flip the WiFi switch on to bring up the "FireNode1" access point
-  (see config.h for SSID/password) and open http://<AP IP>/ - the IP is
-  printed to Serial when the AP starts (defaults to 192.168.4.1).
+  Serial commands (115200 baud, "Newline" line ending):
+    fire     test trigger (starts an alarm episode and floods FIRE)
+    clear    clear every active alarm, network-wide
+    silence  mute buzzers on every node, alarms stay active
+    mesh     print peers, active alarms and packet counters
+    baseline recalibrate the dust sensor
   ============================================================================
 */
 
@@ -44,13 +56,16 @@
 #include "alarm.h"
 #include "serial_commands.h"
 #include "wifi_dashboard.h"
+#include "LoRaWan_APP.h"
+#include "mesh.h"
 
 void setup() {
   Serial.begin(115200);
   delay(200);
+  Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);   // Heltec framework init (radio SPI, timers) - must precede Radio.Init()
   Serial.println();
-  Serial.println("[BOOT] Fire node starting (V3: WiFi + dashboard, no LoRa yet)");
-  Serial.println("[BOOT] Commands: fire | clear | baseline");
+  Serial.println("[BOOT] Fire node starting (V4: LoRa mesh + WiFi dashboard)");
+  Serial.println("[BOOT] Commands: fire | clear | silence | mesh | baseline");
 
   pinMode(PIN_VEXT_CTRL, OUTPUT);
   digitalWrite(PIN_VEXT_CTRL, LOW);   // power on Vext rail (OLED + BMP280) before I2C use
@@ -65,10 +80,13 @@ void setup() {
 
   wifiDashboardInit();  // registers HTTP routes; AP itself starts when the switch is flipped on
 
+  meshInit();           // NVS counters, key, radio. Serviced during calibration below.
+
   calibrateBaseline();  // keep the area smoke-free during this
 }
 
 void loop() {
+  meshService();             // radio IRQs, RX, TX queue, FIRE re-announce, heartbeats
   handleWifiSwitch();
   handleSerialCommand();
   handleFireState();

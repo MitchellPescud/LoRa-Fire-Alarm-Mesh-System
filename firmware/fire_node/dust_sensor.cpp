@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "dust_sensor.h"
+#include "mesh.h"
 #include "config.h"
 #include "state.h"
 #include "alarm.h"
@@ -153,7 +154,9 @@ static void evaluateSmokeState(int delta) {
     if (delta >= SMOKE_TRIGGER_DELTA) {
       highReadingCount++;
       lowReadingCount = 0;
-      if (highReadingCount >= REQUIRED_HIGH_READINGS) {
+      // meshRearmHeld(): after our own episode was cleared, wait out the
+      // hold-off before a (still-elevated) sensor may start a new episode.
+      if (highReadingCount >= REQUIRED_HIGH_READINGS && !meshRearmHeld()) {
         smokePresent = true;
         highReadingCount = 0;
         triggerAlarm();
@@ -288,6 +291,7 @@ void calibrateBaseline() {
       nextPulseMs = millis();
       pulseDustSensor();   // keep the sensor in its spec'd pulse train; discarded during warm-up
     }
+    meshService();         // keep the radio serviced during this blocking wait
   }
 
   int samples[BASELINE_SAMPLE_COUNT];
@@ -303,7 +307,7 @@ void calibrateBaseline() {
     Serial.print(" raw=");
     Serial.println(raw);
 
-    while (millis() - pulseStart < DUST_PULSE_CYCLE_MS) { /* hold to the 10ms pulse cycle */ }
+    while (millis() - pulseStart < DUST_PULSE_CYCLE_MS) { meshService(); /* hold to the 10ms pulse cycle */ }
   }
 
   // Median instead of a plain mean - robust against a handful of outlier

@@ -4,11 +4,12 @@
 #include "state.h"
 #include "alarm.h"
 #include "dust_sensor.h"
+#include "mesh.h"
 
 // ---------------------------------------------------------------------------
-// Serial commands: fire (test trigger) / clear (reset latch) / baseline
-// (recalibrate). No WiFi dashboard on this board revision, so this is the
-// only interface for testing/calibration.
+// Serial commands: fire (test trigger) / clear (reset latch) / silence (mute
+// buzzers network-wide) / mesh (print mesh status) / baseline (recalibrate). Mirrors the actions on the web dashboard (see
+// wifi_dashboard.cpp) - kept in sync manually since they're small.
 // ---------------------------------------------------------------------------
 void handleSerialCommand() {
   if (!Serial.available()) return;
@@ -34,6 +35,10 @@ void handleSerialCommand() {
       highReadingCount = lowReadingCount = 0;
       clearAlarm("[INFO] Alarm manually cleared");
     }
+  } else if (cmd == "silence") {
+    silenceAlarm();
+  } else if (cmd == "mesh") {
+    meshPrintStatus();
   } else if (cmd == "baseline") {
     if (fireActive) {
       Serial.println("[WARN] Cannot recalibrate while the alarm is active - clear it first");

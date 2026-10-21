@@ -6,6 +6,7 @@
 #include "state.h"
 #include "alarm.h"
 #include "dust_sensor.h"
+#include "mesh.h"
 
 static WebServer server(WEB_SERVER_PORT);
 static bool lastSwitchOn = false;   // for edge-detection, so we only start/stop the AP on a change
@@ -38,6 +39,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
   .clear-btn:disabled { background:#444; color:#888; cursor:not-allowed; }
   .fire-btn { background:#cc3322; color:#fff; margin-bottom:8px; }
   .fire-btn:disabled { background:#444; color:#888; cursor:not-allowed; }
+  .sil-btn { background:#cc8822; color:#fff; margin-bottom:8px; }
+  .sil-btn:disabled { background:#444; color:#888; cursor:not-allowed; }
   .cal-btn { background:#2266cc; color:#fff; margin-bottom:8px; }
   .cal-btn:disabled { background:#444; color:#888; cursor:not-allowed; }
   #msg { font-size:0.85em; color:#aaa; margin-top:8px; min-height: 1.2em; }
@@ -71,7 +74,14 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
   <div class="value" id="smoke">--</div>
 </div>
 <div class="card">
+  <div class="label">Mesh</div>
+  <div class="value" id="meshSummary">--</div>
+  <div class="log-box" id="meshPeers" style="height:auto;min-height:40px;color:#9cf"></div>
+  <div class="label" id="meshStats" style="margin-top:8px"></div>
+</div>
+<div class="card">
   <button class="fire-btn" id="fireBtn" onclick="testFire()">Test Fire Alarm</button>
+  <button class="sil-btn" id="silBtn" onclick="silenceAlarm()">Silence Buzzers (all nodes)</button>
   <button class="cal-btn" id="calBtn" onclick="recalibrate()">Recalibrate Baseline</button>
   <button class="clear-btn" id="clearBtn" onclick="clearAlarm()">Clear Alarm</button>
   <div id="msg"></div>
@@ -97,6 +107,24 @@ function refresh() {
     document.getElementById('smoke').textContent = d.dustRaw + ' / ' + d.dustDelta
       + (d.baselineReady ? '' : ' (calibrating...)');
 
+    const m = d.mesh;
+    if (m) {
+      const alarmTxt = m.alarms.length
+        ? m.alarms.map(a => 'FIRE node ' + a.origin + ' (ep ' + a.episode + (a.silenced ? ', silenced' : '') + ')').join(', ')
+        : 'No active alarms';
+      document.getElementById('meshSummary').textContent = alarmTxt;
+      document.getElementById('meshPeers').textContent = m.peers.length
+        ? m.peers.map(p => 'node ' + p.id + (p.stale ? '  UNKNOWN (no heartbeat)' : '  ok')
+            + '  heard ' + p.age + 's ago  rssi ' + p.rssi + ' snr ' + p.snr + '  hops ' + p.hops
+            + (p.hb ? ((p.batt <= 100 ? ('  batt ' + p.batt + '%') : '') + (p.hasTemp ? ('  ' + p.temp.toFixed(1) + ' C') : '')) : '')
+            + (p.alarm ? '  ALARM' : '')).join('\n')
+        : 'No other nodes heard yet';
+      const s = m.stats;
+      document.getElementById('meshStats').textContent = 'node ' + m.addr + '  rx ' + s.rx + '  tx ' + s.tx
+        + '  relayed ' + s.relayed + '  dup ' + s.dup + '  replay ' + s.replay + '  authFail ' + s.authFail
+        + '  crcErr ' + s.crcErr + '  lbt ' + s.lbtDefers;
+    }
+    document.getElementById('silBtn').disabled = !d.fireActive;
     document.getElementById('clearBtn').disabled = !d.fireActive;
     document.getElementById('fireBtn').disabled = d.fireActive;
     document.getElementById('calBtn').disabled = d.fireActive;
@@ -121,6 +149,15 @@ function testFire() {
   const msg = document.getElementById('msg');
   msg.textContent = '';
   fetch('/fire', { method: 'POST' }).then(r => r.text()).then(t => {
+    msg.textContent = t;
+    refresh();
+  });
+}
+
+function silenceAlarm() {
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  fetch('/silence', { method: 'POST' }).then(r => r.text()).then(t => {
     msg.textContent = t;
     refresh();
   });
@@ -170,7 +207,8 @@ static void handleStatus() {
   json += "\"extPower\":" + String(usbPowerDetected ? "true" : "false") + ",";
   json += "\"fiveVLow\":" + String(usbVoltageLow ? "true" : "false") + ",";
   json += "\"fiveV\":" + String(fiveVRailVoltage, 2) + ",";
-  json += "\"baselineReady\":" + String(baselineReady ? "true" : "false");
+  json += "\"baselineReady\":" + String(baselineReady ? "true" : "false") + ",";
+  json += meshStatusJson();
   json += "}";
   server.send(200, "application/json", json);
 }
@@ -184,6 +222,17 @@ static void handleFire() {
   highReadingCount = 0;
   triggerAlarm();
   server.send(200, "text/plain", fireActive ? "Fire alarm triggered" : "Already active");
+}
+
+// Mirrors the "silence" serial command - mutes buzzers on every node.
+static void handleSilence() {
+  if (!fireActive) {
+    server.send(200, "text/plain", "No active alarm");
+    return;
+  }
+  Serial.println("[TEST] Silence via dashboard");
+  silenceAlarm();
+  server.send(200, "text/plain", "Silence sent to all nodes");
 }
 
 // Mirrors the "baseline" serial command. Blocking (~3.3s) - the HTTP
@@ -229,6 +278,7 @@ void wifiDashboardInit() {
   server.on("/fire", HTTP_POST, handleFire);
   server.on("/baseline", HTTP_POST, handleBaseline);
   server.on("/clear", HTTP_POST, handleClear);
+  server.on("/silence", HTTP_POST, handleSilence);
   server.onNotFound(handleNotFound);
 }
 

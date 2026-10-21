@@ -3,6 +3,7 @@
 #include "config.h"
 #include "state.h"
 #include "battery.h"
+#include "mesh.h"
 
 static unsigned long lastDisplayMs = 0;
 
@@ -31,7 +32,13 @@ void handleDisplay() {
 
   display.clear();
   display.setFont(ArialMT_Plain_16);
-  display.drawString(0, 0, fireActive ? "** FIRE **" : "Status: Normal");
+  if (!fireActive) {
+    display.drawString(0, 0, "Status: Normal");
+  } else if (meshLocalEpisodeActive()) {
+    display.drawString(0, 0, "** FIRE **");
+  } else {
+    display.drawString(0, 0, "FIRE node " + String(meshFirstAlarmOrigin()));   // alarm raised by another node
+  }
 
   display.setFont(ArialMT_Plain_10);
   String tempLine = bmpOk ? ("Temp: " + String(lastTemp, 1) + " C") : String("Temp: N/A");
@@ -42,7 +49,7 @@ void handleDisplay() {
   if (wifiApActive) tempLine += "  WiFi";
   display.drawString(0, 20, tempLine);
 
-  display.drawString(0, 34, "Batt: " + String(batteryPercent) + "% (" + String(batteryVoltage, 2) + "V)");
+  display.drawString(0, 34, "Batt: " + String(batteryPercent) + "% " + String(batteryVoltage, 2) + "V N:" + String(meshPeerCount()));
   display.drawString(0, 48, "Smoke: " + String(dustPercent) + "% (base " + String(dustBaseline) + ")");
 
   display.display();

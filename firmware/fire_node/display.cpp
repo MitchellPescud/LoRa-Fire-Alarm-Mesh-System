@@ -16,8 +16,10 @@ void displayInit() {
 }
 
 // ---------------------------------------------------------------------------
-// OLED display: fire status, temperature, battery, smoke %, WiFi indicator.
-// Also drives the battery reading update (kept on the same 250ms cadence it
+// OLED display: fire status, temperature (with the 5V sense reading
+// appended whenever external 5V is detected, or a WiFi tag when the AP is
+// up), battery, smoke %. Also
+// drives the battery reading update (kept on the same 250ms cadence it
 // always ran at) so battery.cpp doesn't need its own separate timer.
 // ---------------------------------------------------------------------------
 void handleDisplay() {
@@ -33,6 +35,10 @@ void handleDisplay() {
 
   display.setFont(ArialMT_Plain_10);
   String tempLine = bmpOk ? ("Temp: " + String(lastTemp, 1) + " C") : String("Temp: N/A");
+  if (usbPowerDetected) {
+    tempLine += "  5V:" + String(fiveVRailVoltage, 2);
+    if (usbVoltageLow) tempLine += "!";
+  }
   if (wifiApActive) tempLine += "  WiFi";
   display.drawString(0, 20, tempLine);
 

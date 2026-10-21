@@ -22,9 +22,9 @@ static long dustRingSum    = 0;
 
 // ---------------------------------------------------------------------------
 // GP2Y1010AU0F LED-pulse + ADC sample - the low-level primitive. The boost
-// converter (5V rail) is held on continuously from dustSensorInit() onward,
-// so this always samples a fully-settled rail with no per-pulse power-up
-// transient.
+// converter (5V rail) is held on continuously from dustSensorInit() onward
+// (when enabled), so this always samples a fully-settled rail with no
+// per-pulse power-up transient.
 // ---------------------------------------------------------------------------
 static int pulseDustSensor() {
   digitalWrite(PIN_DUST_LED, LOW);            // fire the IR LED
@@ -42,17 +42,17 @@ static int dustRingAverage() {
 
 // ---------------------------------------------------------------------------
 // Compensates for ESP32-S3 ADC reference drift as VBAT sags. Confirmed via
-// scope that the dust sensor's 5V boost rail itself stays rock steady
-// regardless of VBAT - the drift lives in the chip's own onboard 3.3V/ADC
-// reference (fed from VBAT), not the sensor. Since batteryVoltage is read
-// through that same reference, scaling by (VBAT at calibration / VBAT now)
-// cancels most of the drift back out.
+// scope (on the prior board revision) that the dust sensor's 5V boost rail
+// itself stays rock steady regardless of VBAT - the drift lives in the
+// chip's own onboard 3.3V/ADC reference (fed from VBAT), not the sensor.
+// Since batteryVoltage is read through that same reference, scaling by
+// (VBAT at calibration / VBAT now) cancels most of the drift back out.
 //
-// Real logged sag/recovery events show raw counts moving ~3x more (in
-// percentage terms) than VBAT itself - not a flat 1:1 ratio - so the
-// correction is raised to VBAT_CORRECTION_EXPONENT (see config.h) rather
-// than applied linearly. Still an empirical approximation, not a true
-// independent reference - tune the exponent further if it over/under-shoots.
+// Real logged sag/recovery events on the prior board revision showed raw
+// counts moving ~3x more (in percentage terms) than VBAT itself - not a
+// flat 1:1 ratio - so the correction is raised to VBAT_CORRECTION_EXPONENT
+// (see config.h) rather than applied linearly. Still an empirical
+// approximation - re-verify against real data on this board revision.
 //
 // Only ever pushes the reading UP relative to the raw value, never down -
 // see the max() in the caller. Correction can't tell a real smoke signal
@@ -68,54 +68,59 @@ static int applyVbatCorrection(int raw) {
   return (int)(raw * pow(ratio, VBAT_CORRECTION_EXPONENT));
 }
 
-void dustSensorInit() {
-  analogReadResolution(12);   // needed before the USB-sense read below
+// ---------------------------------------------------------------------------
+// Reads the 5V-line sense divider (PIN_FIVE_V_SENSE) and decides whether
+// the boost converter should be enabled - if external 5V is already
+// present (USB or wall), the battery-fed boost must not also be enabled
+// onto the same rail. Also flags a low-voltage warning if 5V is present but
+// weak (see FIVE_V_LOW_WARNING_THRESHOLD in config.h), since a sagging
+// supply might not meet the Sharp sensor's ~4.5V minimum even with the
+// boost switched off. Boot-time only - not re-checked while running.
+// ---------------------------------------------------------------------------
+static void senseFiveVAndSetBoost() {
+  pinMode(PIN_FIVE_V_SENSE, INPUT);
+  int fiveVRaw = analogRead(PIN_FIVE_V_SENSE);
+  float fiveVPinVoltage = (fiveVRaw / (float)ADC_RESOLUTION) * ADC_REF_VOLTAGE * FIVE_V_SENSE_CAL_RATIO;
+  // Undo the 10k/10k divider's halving, then subtract the Schottky diode's
+  // forward drop - the divider taps the 5V pin before the diode, so *2
+  // alone gives the incoming voltage, not what actually reaches the rail
+  // after the diode drop.
+  fiveVRailVoltage = (fiveVPinVoltage * 2.0f) - SCHOTTKY_DIODE_DROP_V;
 
-  // Sense the board's 5V pin (via an external 10k/10k divider into GPIO5)
-  // BEFORE deciding whether to enable the boost converter - if USB is
-  // already supplying 5V natively, the battery-fed boost must not also be
-  // enabled onto the same rail. GPIO5's output driver is burnt out on this
-  // unit, but reading it is fine - see config.h.
-  pinMode(PIN_USB_SENSE, INPUT);
-  usbPowerDetected = (digitalRead(PIN_USB_SENSE) == HIGH);
-  Serial.print("[BOOT] USB 5V sense=");
-  Serial.print(usbPowerDetected ? "HIGH" : "LOW");
-  Serial.println(usbPowerDetected
-    ? " -> USB 5V present, leaving boost converter OFF"
-    : " -> no USB 5V, enabling boost converter");
+  usbPowerDetected = (fiveVPinVoltage >= FIVE_V_PRESENT_THRESHOLD);
+  usbVoltageLow = usbPowerDetected && (fiveVPinVoltage < FIVE_V_LOW_WARNING_THRESHOLD);
+
+  Serial.print("[BOOT] 5V sense raw=");
+  Serial.print(fiveVRaw);
+  Serial.print(" pin=");
+  Serial.print(fiveVPinVoltage, 2);
+  Serial.print("V (rail~");
+  Serial.print(fiveVRailVoltage, 2);
+  Serial.print("V) -> ");
+  if (!usbPowerDetected) {
+    Serial.println("no external 5V, enabling boost converter");
+  } else if (usbVoltageLow) {
+    Serial.println("external 5V present but LOW, boost OFF - check supply");
+  } else {
+    Serial.println("external 5V present, boost OFF");
+  }
 
   pinMode(PIN_BOOST_EN, OUTPUT);
   if (usbPowerDetected) {
-    digitalWrite(PIN_BOOST_EN, HIGH);  // boost OFF - USB's native 5V already feeds the rail
+    digitalWrite(PIN_BOOST_EN, HIGH);  // boost OFF - external 5V already feeds the rail
   } else {
     digitalWrite(PIN_BOOST_EN, LOW);   // boost ON (confirmed near-instant via multimeter)
     delay(BOOST_SETTLE_MS);            // small settle margin before anything reads the dust sensor
   }
+}
+
+void dustSensorInit() {
+  analogReadResolution(12);   // needed before the 5V-sense read below
+
+  senseFiveVAndSetBoost();
 
   pinMode(PIN_DUST_LED, OUTPUT);
   digitalWrite(PIN_DUST_LED, HIGH);  // idle HIGH, pulsed LOW to fire the IR LED
-}
-
-// ---------------------------------------------------------------------------
-// Re-checks the USB 5V sense pin every loop() pass (cheap - just a
-// digitalRead) and toggles the boost converter if the state has changed
-// since boot (or the last change) - covers USB being plugged or unplugged
-// mid-operation, not just whatever was true when dustSensorInit() ran.
-// Edge-triggered, mirrors handleWifiSwitch()'s pattern in wifi_dashboard.cpp.
-// ---------------------------------------------------------------------------
-void handleUsbSense() {
-  bool nowDetected = (digitalRead(PIN_USB_SENSE) == HIGH);
-  if (nowDetected == usbPowerDetected) return;  // no change
-  usbPowerDetected = nowDetected;
-
-  if (usbPowerDetected) {
-    digitalWrite(PIN_BOOST_EN, HIGH);  // USB 5V now present - switch boost OFF
-    Serial.println("[INFO] USB 5V detected - boost converter switched OFF");
-  } else {
-    digitalWrite(PIN_BOOST_EN, LOW);   // USB 5V gone - switch boost back ON
-    delay(BOOST_SETTLE_MS);
-    Serial.println("[INFO] USB 5V no longer detected - boost converter switched ON");
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +272,13 @@ void calibrateBaseline() {
   display.drawString(0, 0, "Calibrating");
   display.drawString(0, 12, "baseline...");
   display.drawString(0, 24, "Keep area clear");
-  display.drawString(0, 36, usbPowerDetected ? "5V: USB" : "5V: Battery (boost)");
+  if (!usbPowerDetected) {
+    display.drawString(0, 36, "5V: Battery (boost)");
+  } else if (usbVoltageLow) {
+    display.drawString(0, 36, "5V: USB (LOW!)");
+  } else {
+    display.drawString(0, 36, "5V: USB");
+  }
   display.display();
 
   unsigned long warmupStart = millis();

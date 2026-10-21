@@ -63,6 +63,10 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(
   <div class="value" id="batt">--</div>
 </div>
 <div class="card">
+  <div class="label">Power source</div>
+  <div class="value" id="power">--</div>
+</div>
+<div class="card">
   <div class="label">Smoke (raw / delta above baseline)</div>
   <div class="value" id="smoke">--</div>
 </div>
@@ -87,6 +91,9 @@ function refresh() {
 
     document.getElementById('temp').textContent = d.hasTemp ? (d.tempC.toFixed(1) + ' C') : 'N/A';
     document.getElementById('batt').textContent = d.battPercent + '% (' + d.battVoltage.toFixed(2) + 'V)';
+    document.getElementById('power').textContent = d.extPower
+      ? ('External 5V ' + d.fiveV.toFixed(2) + 'V' + (d.fiveVLow ? ' (LOW!)' : ''))
+      : 'Battery (boost)';
     document.getElementById('smoke').textContent = d.dustRaw + ' / ' + d.dustDelta
       + (d.baselineReady ? '' : ' (calibrating...)');
 
@@ -160,6 +167,9 @@ static void handleStatus() {
   json += "\"dustRaw\":" + String(dustRawLast) + ",";
   json += "\"dustBaseline\":" + String(dustBaseline) + ",";
   json += "\"dustDelta\":" + String(dustRawLast - dustBaseline) + ",";
+  json += "\"extPower\":" + String(usbPowerDetected ? "true" : "false") + ",";
+  json += "\"fiveVLow\":" + String(usbVoltageLow ? "true" : "false") + ",";
+  json += "\"fiveV\":" + String(fiveVRailVoltage, 2) + ",";
   json += "\"baselineReady\":" + String(baselineReady ? "true" : "false");
   json += "}";
   server.send(200, "application/json", json);

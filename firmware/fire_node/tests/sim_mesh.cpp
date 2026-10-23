@@ -148,11 +148,14 @@ struct API {
   uint32_t *rxDup, *rxReplay, *rxAuth, *rxForeign, *rxCleared;
   std::string (*json)();
   int (*clearOrigin)(uint8_t); int (*silenceOrigin)(uint8_t);
+  int (*sendCmd)(uint8_t, uint8_t); int (*cmdState)(uint8_t, uint8_t, uint8_t *);
+  int *cmdExec; uint8_t *cmdLast; uint8_t *cmdResult; uint32_t *rxCmdRejected;
 };
 #define MK(NS, NM) API{NM, NS::meshInit, NS::meshService, NS::handleFireState, NS::triggerAlarm, NS::clearAlarm, NS::silenceAlarm, \
   &NS::fireActive, NS::meshLocalEpisodeActive, NS::meshRearmHeld, NS::simBuzzerSilenced, NS::meshActiveAlarmCount, \
   NS::meshFirstAlarmOrigin, NS::meshPeerCount, &NS::meshStats.rxDup, &NS::meshStats.rxReplay, &NS::meshStats.rxAuthFail, \
-  &NS::meshStats.rxBadMagic, &NS::meshStats.rxClearedDrop, []() { return std::string(NS::meshStatusJson().c_str()); }, NS::meshClearOrigin, NS::meshSilenceOrigin}
+  &NS::meshStats.rxBadMagic, &NS::meshStats.rxClearedDrop, []() { return std::string(NS::meshStatusJson().c_str()); }, NS::meshClearOrigin, NS::meshSilenceOrigin, \
+  NS::meshSendCommand, NS::meshCommandState, &NS::simCmdExecCount, &NS::simCmdLast, &NS::simCmdResult, &NS::meshStats.rxCmdRejected}
 static API nodes[MAXN] = {MK(NodeA, "A"), MK(NodeB, "B"), MK(NodeC, "C"), MK(NodeK, "K")};
 static int NN = 3;
 
@@ -328,6 +331,89 @@ int main(int argc, char **argv) {
   CHECK(reached >= 24, "FIRE delivery >= 24/25 at 30% loss");
   CHECK(cleared >= 23, "CLEAR delivery >= 23/25 at 30% loss");
   lossProb = 0;
+
+  printf("S11 remote commands: A -> C across B (line topology)\n");
+  run(40000);   // fresh heartbeats so every node has a replay baseline for every other node
+  {
+    uint8_t res = 99;
+    int r1 = 0, r2 = 0, r3 = 0, r4 = 0;
+    call(0, [&] { r1 = nodes[0].sendCmd(1 /*self*/, 2); r2 = nodes[0].sendCmd(3, 9 /*bad cmd*/); r3 = nodes[0].sendCmd(0, 2); });
+    CHECK(r1 == -1 && r2 == -1 && r3 == -1, "self / unknown command / node 0 are refused");
+
+    // normal request: executed exactly once, ACK comes back over two hops
+    int c0 = *nodes[0].cmdExec, c1 = *nodes[1].cmdExec, c2 = *nodes[2].cmdExec;
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 2 /*RECALIBRATE*/); r2 = nodes[0].sendCmd(3, 2); });
+    CHECK(r1 == 0 && r2 == 1, "first request queued, identical pending one reported");
+    CHECK(nodes[0].cmdState(3, 2, &res) == 0, "state is PENDING right after sending");
+    run(6000);
+    CHECK(nodes[0].cmdState(3, 2, &res) == 1 && res == 0, "ACK received: DONE / OK");
+    CHECK(*nodes[2].cmdExec == c2 + 1 && *nodes[2].cmdLast == 2, "C ran RECALIBRATE exactly once");
+    CHECK(*nodes[1].cmdExec == c1 && *nodes[0].cmdExec == c0, "B (relay) and A (sender) did not execute it");
+
+    // result codes travel back
+    *nodes[2].cmdResult = 2;   // BUSY
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 1 /*TEST_FIRE*/); });
+    run(6000);
+    CHECK(nodes[0].cmdState(3, 1, &res) == 1 && res == 2, "BUSY result delivered to the asker");
+    *nodes[2].cmdResult = 0;
+
+    // lost ACKs: B -> A link cut, so A gets no ACK. All repeats reach C but it must still run once.
+    rssiMat[1][0] = -999;
+    c2 = *nodes[2].cmdExec;
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 3 /*REBOOT*/); });
+    run(16000);
+    CHECK(*nodes[2].cmdExec == c2 + 1, "3 repeated copies -> executed once (de-duplicated)");
+    CHECK(nodes[0].cmdState(3, 3, &res) == 2, "no ACK within the wait -> NO REPLY");
+    rssiMat[1][0] = -80;
+
+    // the same request sent again later is a NEW request (new reqId) and runs again
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 3); });
+    run(6000);
+    CHECK(*nodes[2].cmdExec == c2 + 2 && nodes[0].cmdState(3, 3, &res) == 1, "a fresh request runs again and is ACKed");
+
+    // STATUS is answered by the mesh layer itself (no application hook)
+    c2 = *nodes[2].cmdExec;
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 4); });
+    run(6000);
+    CHECK(nodes[0].cmdState(3, 4, &res) == 1 && res == 0 && *nodes[2].cmdExec == c2, "STATUS acked without touching the app hook");
+
+    // captured CMD replayed after the target reboots must not execute
+    std::vector<uint8_t> oldCmd;
+    for (auto &c : capture) if (c.d.size() > 2 && (c.d[2] & 0x0F) == 5 && c.d[4] == 1 /*from A*/) { oldCmd = c.d; break; }
+    CHECK(!oldCmd.empty(), "captured a CMD");
+    sim_cur_node = 2; nodes[2].init();                 // C reboots: replay window empty
+    c2 = *nodes[2].cmdExec;
+    uint32_t rejBefore = *nodes[2].rxCmdRejected;
+    sim_cur_node = 2; sim_rx_handler[2](oldCmd.data(), (uint8_t)oldCmd.size(), -60, 8);
+    CHECK(*nodes[2].cmdExec == c2 && *nodes[2].rxCmdRejected == rejBefore + 1, "replayed CMD right after reboot refused (no baseline yet)");
+    sim_cur_node = 2; sim_rx_handler[2](oldCmd.data(), (uint8_t)oldCmd.size(), -60, 8);
+    CHECK(*nodes[2].cmdExec == c2, "...and again: still not executed");
+
+    // forged CMD
+    uint32_t authBefore2 = *nodes[2].rxAuth;
+    std::vector<uint8_t> forgedCmd = oldCmd; forgedCmd[10] = 3; /* target stays, flip cmd byte */ forgedCmd[11] ^= 0x07;
+    sim_cur_node = 2; sim_rx_handler[2](forgedCmd.data(), (uint8_t)forgedCmd.size(), -60, 8);
+    CHECK(*nodes[2].rxAuth == authBefore2 + 1 && *nodes[2].cmdExec == c2, "forged CMD dropped by the HMAC");
+
+    // after C has heard A's heartbeat again, genuine commands work again
+    run(40000);
+    call(0, [&] { r1 = nodes[0].sendCmd(3, 2); });
+    run(6000);
+    CHECK(nodes[0].cmdState(3, 2, &res) == 1 && *nodes[2].cmdExec == c2 + 1, "after re-learning A, commands to C work again");
+  }
+
+  printf("S12 command node K commands fire node A (3 hops away) and gets the ACK\n");
+  NN = 4; sim_cur_node = 3; nodes[3].init();
+  run(70000);   // K learns the network, A/B/C learn K
+  {
+    uint8_t res = 99; int r = -9;
+    int a0 = *nodes[0].cmdExec;
+    call(3, [&] { r = nodes[3].sendCmd(1, 2); });
+    run(8000);
+    CHECK(r == 0 && nodes[3].cmdState(1, 2, &res) == 1 && res == 0, "K got the ACK from A");
+    CHECK(*nodes[0].cmdExec == a0 + 1, "A executed it once");
+  }
+  NN = 3;
 
   printf("\n%d checks, %d failures\n", checks, fails);
   return fails ? 1 : 0;

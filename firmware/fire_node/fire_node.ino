@@ -1,14 +1,18 @@
 /*
   ============================================================================
-  Fire Alarm Node - V4 (LoRa mesh + WiFi dashboard)
+  Fire Alarm Node - V5 (LoRa mesh + WiFi dashboard + node-to-node commands)
   Board: Heltec WiFi LoRa 32 V4.3 (ESP32-S3 + SX1262 + KCT8103L front-end)
   ============================================================================
 
-  V3 (sensing, alarm, WiFi dashboard) plus the LoRa mesh: every node
-  transmits, receives and relays, with no gateway. This sketch is for the
-  fire alarm nodes; the PC-attached command node is a separate, stripped
-  sketch that shares mesh_proto.*, secrets.h and the LoRa/mesh settings in
-  config.h.
+  V4 (sensing, alarm, WiFi dashboard, LoRa mesh with no gateway) plus V5:
+  ANY node can command ANY other node. A command (test fire, recalibrate
+  dust baseline, reboot, status request) is an authenticated CMD packet
+  addressed to one node, sent 3 times (or until its ACK arrives). The target
+  runs it once and answers with an ACK that the dashboard shows as done /
+  refused / no reply. The dashboard has a card for every other node with
+  Silence / Clear alarm and the four commands.
+  The PC-attached command node (Fire_Command_v2) is a separate, stripped
+  sketch that shares the mesh code, secrets.h and the LoRa/mesh settings.
 
   Per-node setup (config.h): set NODE_ADDR to a unique value (1..99) before
   flashing each alarm. secrets.h (the pre-shared HMAC key) must be identical on
@@ -27,7 +31,10 @@
     mesh_hmac.cpp       - ESP32 HMAC-SHA256 backend (mbedtls) + key loading
     mesh_radio.*        - Heltec radio driver wrapper: RX, TX queue, LBT
     mesh.*              - flooding/relay, alarm episodes, CLEAR/SILENCE,
-                          heartbeats, peer table, status
+                          heartbeats, peer table, remote CMD/ACK, status
+    node_commands.*     - what THIS node does when told to test fire /
+                          recalibrate / reboot
+    net_panel.h         - dashboard network cards (shared with command node)
     dust_sensor.*       - GP2Y1010AU0F pulse train, calibration, smoke eval,
                           5V-line sense -> boost enable
     alarm.*             - buzzer + alarm LED, local trigger/clear/silence
@@ -44,6 +51,7 @@
     silence  mute buzzers on every node, alarms stay active
     mesh     print peers, active alarms and packet counters
     baseline recalibrate the dust sensor
+    cmd <node> <fire|recal|reboot|status>   run a command on another node
   ============================================================================
 */
 
@@ -58,14 +66,15 @@
 #include "wifi_dashboard.h"
 #include "LoRaWan_APP.h"
 #include "mesh.h"
+#include "node_commands.h"
 
 void setup() {
   Serial.begin(115200);
   delay(200);
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);   // Heltec framework init (radio SPI, timers) - must precede Radio.Init()
   Serial.println();
-  Serial.println("[BOOT] Fire node starting (V4: LoRa mesh + WiFi dashboard)");
-  Serial.println("[BOOT] Commands: fire | clear | silence | mesh | baseline");
+  Serial.println("[BOOT] Fire node starting (V5: LoRa mesh + WiFi dashboard + node commands)");
+  Serial.println("[BOOT] Commands: fire | clear | silence | mesh | baseline | cmd <node> <fire|recal|reboot|status>");
 
   pinMode(PIN_VEXT_CTRL, OUTPUT);
   digitalWrite(PIN_VEXT_CTRL, LOW);   // power on Vext rail (OLED + BMP280) before I2C use
@@ -86,7 +95,8 @@ void setup() {
 }
 
 void loop() {
-  meshService();             // radio IRQs, RX, TX queue, FIRE re-announce, heartbeats
+  meshService();             // radio IRQs, RX, TX queue, FIRE re-announce, heartbeats, remote commands
+  nodeCommandService();      // scheduled work from remote commands (recalibrate, reboot)
   handleWifiSwitch();
   handleSerialCommand();
   handleFireState();

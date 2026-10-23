@@ -14,5 +14,7 @@ The Arduino IDE ignores this folder. Run from `tests/` on a PC with g++:
 The simulator covers: heartbeat/peer discovery over a relay, FIRE across a
 line topology, silence, network-wide clear, re-arm hold-off, new episode after
 clear, replayed CLEAR, forged/foreign packets, command-node clear, hidden-node
-collisions and 30% packet loss. It does NOT test the Heltec radio driver or RF
+collisions and 30% packet loss, plus (V5) node-to-node commands: CMD/ACK across
+a relay, result codes, de-duplication of repeated copies, no-reply timeout,
+replayed/forged CMD rejection and command-node -> fire-node over 3 hops. It does NOT test the Heltec radio driver or RF
 behaviour - that needs real boards.

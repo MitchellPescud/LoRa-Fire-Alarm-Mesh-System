@@ -37,7 +37,7 @@
 #define FN_XSTR(x) #x
 #define FN_STR(x)  FN_XSTR(x)
 #ifndef NODE_ADDR
-#define NODE_ADDR        1                      // UNIQUE per fire node (1..99). Command node = 100.
+#define NODE_ADDR        2                      // UNIQUE per fire node (1..99). Command node = 100.
 #endif
 #define NODE_ID          "node" FN_STR(NODE_ADDR)
 #define WIFI_AP_SSID     "FireNode" FN_STR(NODE_ADDR)
@@ -223,6 +223,12 @@ const int16_t  RELAY_RSSI_NEAR    = -40;    // heard this strongly -> relay afte
 #define MESH_MAX_ALARMS  4
 #define MESH_MAX_CTRL    6
 #define MESH_TX_QUEUE    8
+#define MESH_MAX_OUT     8                        // remote commands this node is tracking (pending + recent)
+
+// Remote commands (CMD / ACK). CMD is sent CTRL_REPEATS times unless the
+// target's ACK arrives first; with no ACK the request is shown as "no reply"
+// this long after the last copy went out.
+const unsigned long CMD_ACK_WAIT_MS    = 8000;
 
 #if LORA_TX_POWER_DBM > LORA_TX_POWER_MAX
 #error "LORA_TX_POWER_DBM exceeds LORA_TX_POWER_MAX - check EIRP limit before raising the cap"

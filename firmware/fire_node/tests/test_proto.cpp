@@ -62,6 +62,17 @@ int main(){
   // a CLEAR must not authenticate as a SILENCE (type is covered by the tag)
   c.type=MESH_T_CLEAR; n=meshEncode(c,b); b[2]=(1<<4)|MESH_T_SILENCE; CHECK(meshDecode(b,n,d)==MESH_ERR_AUTH);
 
+  // remote command packets
+  MeshPacket q; memset(&q,0,sizeof q); q.type=MESH_T_CMD; q.ttl=5; q.origin=100; q.counter=0x00020003; q.target=7; q.cmd=MESH_CMD_REBOOT; q.reqId=200;
+  n=meshEncode(q,b); CHECK(n==17); CHECK(meshDecode(b,n,d)==MESH_OK && d.type==MESH_T_CMD && d.target==7 && d.cmd==MESH_CMD_REBOOT && d.reqId==200 && d.origin==100);
+  printf("CMD:  "); for(size_t i=0;i<n;i++) printf("%02x",b[i]); printf("\n");
+  for(size_t i=4;i<n;i++){ memcpy(r,b,n); r[i]^=0x01; CHECK(meshDecode(r,n,d)==MESH_ERR_AUTH); }   // target/cmd/reqId are all covered by the tag
+  memcpy(r,b,n); r[2]=(1<<4)|MESH_T_ACK; CHECK(meshDecode(r,n,d)!=MESH_OK);                        // CMD cannot be turned into an ACK
+  MeshPacket k; memset(&k,0,sizeof k); k.type=MESH_T_ACK; k.ttl=5; k.origin=7; k.counter=9; k.target=100; k.cmd=MESH_CMD_REBOOT; k.reqId=200; k.result=MESH_ACK_BUSY;
+  n=meshEncode(k,b); CHECK(n==18); CHECK(meshDecode(b,n,d)==MESH_OK && d.type==MESH_T_ACK && d.target==100 && d.reqId==200 && d.result==MESH_ACK_BUSY && d.origin==7);
+  CHECK(meshDecode(b,n-1,d)==MESH_ERR_LEN);
+  memcpy(r,b,n); r[2]=(1<<4)|7; CHECK(meshDecode(r,n,d)==MESH_ERR_TYPE);
+
   // replay window
   MeshReplayWindow w; memset(&w,0,sizeof w);
   CHECK(meshReplayCheck(w,100)==MESH_RP_NEW);

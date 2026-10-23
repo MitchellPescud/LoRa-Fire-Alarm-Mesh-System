@@ -7,6 +7,7 @@
 #undef ALARM_H
 #undef MESH_RADIO_H
 #undef MESH_PROTO_H
+#undef NODE_COMMANDS_H
 
 #include "../config.h"
 #include "../state.h"
@@ -26,6 +27,14 @@ bool radioQueueTx(const uint8_t *buf, uint8_t len, uint32_t delayMs, RadioPrio p
   return sim_queue_tx(NODE_IDX, buf, len, delayMs, prio == RADIO_PRIO_HIGH);
 }
 void radioService() { sim_radio_service(NODE_IDX); }
+
+#include "../node_commands.h"
+// Test double for the per-sketch command hook: counts executions, result is settable.
+int     simCmdExecCount = 0;
+uint8_t simCmdLast = 0;
+uint8_t simCmdResult = 0;   // MESH_ACK_OK
+uint8_t nodeCommandExec(uint8_t cmd) { simCmdExecCount++; simCmdLast = cmd; return simCmdResult; }
+void nodeCommandService() {}
 
 #include "../alarm.cpp"
 #include "../mesh.cpp"

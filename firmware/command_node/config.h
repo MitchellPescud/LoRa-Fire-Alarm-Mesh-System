@@ -27,8 +27,10 @@
 // alarm LED which cannot be GPIO5 (radio PA_CTX) - pick a free pin such as
 // GPIO38-42 when you add it, and use the same one on the fire nodes.
 #define PIN_FIRE_LED      -1   // alarm LED, anode on the GPIO, HIGH = on (-1 = not fitted)
-#define PIN_WIFI_LED      -1   // would be GPIO4 on the fire nodes; unused while WiFi is always on
-// #define PIN_WIFI_SWITCH 16  // fire nodes: grounds the pin when ON (INPUT_PULLUP, no external pull-up)
+#define PIN_WIFI_LED      -1   // optional: GPIO4 on the fire nodes. Lit while the switch is ON (own network)
+#define PIN_WIFI_SWITCH   16   // grounds the pin when ON (INPUT_PULLUP, no external pull-up).
+                               // ON  = make our own access point (WIFI_AP_SSID)
+                               // OFF = join the saved network (see below)
 
 // ---------------------------------------------------------------------------
 // Node identity / WiFi access point / dashboard
@@ -41,6 +43,15 @@
 #define WIFI_AP_PASSWORD "firecommand123"       // CALIBRATE: change before real use - WPA2, 8+ chars.
                                                 // Anyone on this network can clear fire alarms!
 #define WEB_SERVER_PORT  80
+
+// Network joined when the WiFi switch is OFF. Normally set from the serial
+// terminal (stored in flash, survives reboots):
+//     wifi set <ssid> <password>      wifi reset      wifi status
+// These compile-time values are only the fallback when nothing is saved
+// ("wifi reset" returns to them). Leave empty to require `wifi set`.
+#define WIFI_STA_DEFAULT_SSID      "ORBI73"
+#define WIFI_STA_DEFAULT_PASSWORD  "fuzzyhippo930"
+#define WIFI_STA_RETRY_MS          15000        // time between connection attempts while the network is unreachable
 
 // ---------------------------------------------------------------------------
 // Timing
@@ -106,6 +117,12 @@ const int16_t  RELAY_RSSI_NEAR    = -40;    // heard this strongly -> relay afte
 #define MESH_MAX_ALARMS  4
 #define MESH_MAX_CTRL    6
 #define MESH_TX_QUEUE    8
+#define MESH_MAX_OUT     8                        // remote commands this node is tracking (pending + recent)
+
+// Remote commands (CMD / ACK). CMD is sent CTRL_REPEATS times unless the
+// target's ACK arrives first; with no ACK the request is shown as "no reply"
+// this long after the last copy went out.
+const unsigned long CMD_ACK_WAIT_MS    = 8000;
 
 #if LORA_TX_POWER_DBM > LORA_TX_POWER_MAX
 #error "LORA_TX_POWER_DBM exceeds LORA_TX_POWER_MAX - check EIRP limit before raising the cap"

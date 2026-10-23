@@ -4,6 +4,7 @@
 #include "config.h"
 #include "state.h"
 #include "mesh.h"
+#include "wifi_dashboard.h"
 
 static unsigned long lastDisplayMs = 0;
 
@@ -32,7 +33,9 @@ void handleDisplay() {
 
   display.setFont(ArialMT_Plain_10);
   display.drawString(0, 20, "Nodes heard: " + String(meshPeerCount()));
-  display.drawString(0, 34, String("WiFi: ") + WIFI_AP_SSID);
-  display.drawString(0, 48, "http://" + WiFi.softAPIP().toString());
+  String w1, w2;
+  wifiDisplayLines(w1, w2);
+  display.drawString(0, 34, w1);
+  display.drawString(0, 48, w2);
   display.display();
 }

@@ -23,6 +23,8 @@ static size_t payloadLen(uint8_t type) {
     case MESH_T_HEARTBEAT: return 3;
     case MESH_T_CLEAR:
     case MESH_T_SILENCE:   return 3;
+    case MESH_T_CMD:       return 3;
+    case MESH_T_ACK:       return 4;
     default:               return 0;
   }
 }
@@ -64,6 +66,17 @@ size_t meshEncode(const MeshPacket &p, uint8_t *buf) {
       pl[0] = p.alarmOrigin;
       put16(pl + 1, p.episode);
       break;
+    case MESH_T_CMD:
+      pl[0] = p.target;
+      pl[1] = p.cmd;
+      pl[2] = p.reqId;
+      break;
+    case MESH_T_ACK:
+      pl[0] = p.target;
+      pl[1] = p.cmd;
+      pl[2] = p.reqId;
+      pl[3] = p.result;
+      break;
     default:
       break;
   }
@@ -79,7 +92,7 @@ MeshDecodeResult meshDecode(const uint8_t *buf, size_t len, MeshPacket &out) {
   if (buf[0] != MESH_MAGIC0 || buf[1] != MESH_MAGIC1) return MESH_ERR_MAGIC;
   if ((buf[2] >> 4) != MESH_PROTO_VER) return MESH_ERR_VER;
   uint8_t type = buf[2] & 0x0F;
-  if (type < MESH_T_FIRE || type > MESH_T_SILENCE) return MESH_ERR_TYPE;
+  if (type < MESH_T_FIRE || type > MESH_T_ACK) return MESH_ERR_TYPE;
   size_t body = MESH_HDR_LEN + payloadLen(type);
   if (len != body + MESH_TAG_LEN) return MESH_ERR_LEN;
 
@@ -110,6 +123,17 @@ MeshDecodeResult meshDecode(const uint8_t *buf, size_t len, MeshPacket &out) {
     case MESH_T_SILENCE:
       out.alarmOrigin = pl[0];
       out.episode     = get16(pl + 1);
+      break;
+    case MESH_T_CMD:
+      out.target = pl[0];
+      out.cmd    = pl[1];
+      out.reqId  = pl[2];
+      break;
+    case MESH_T_ACK:
+      out.target = pl[0];
+      out.cmd    = pl[1];
+      out.reqId  = pl[2];
+      out.result = pl[3];
       break;
   }
   return MESH_OK;

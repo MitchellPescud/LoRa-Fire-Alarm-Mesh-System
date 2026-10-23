@@ -24,6 +24,9 @@
 //   HEARTBEAT payload 3: battPct u8, tempC10 i16
 //   CLEAR     payload 3: alarmOrigin u8, episode u16     (origin = who sent it)
 //   SILENCE   payload 3: alarmOrigin u8, episode u16
+//   CMD       payload 3: target u8, cmd u8, reqId u8     (origin = who asked)
+//   ACK       payload 4: target u8, cmd u8, reqId u8, result u8
+//                        (origin = who answered, target = who asked)
 // ---------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -42,8 +45,22 @@ enum MeshType : uint8_t {
   MESH_T_FIRE      = 1,
   MESH_T_HEARTBEAT = 2,
   MESH_T_CLEAR     = 3,
-  MESH_T_SILENCE   = 4
+  MESH_T_SILENCE   = 4,
+  MESH_T_CMD       = 5,   // "do <cmd> on node <target>"
+  MESH_T_ACK       = 6    // target's answer to a CMD
 };
+
+// Remote commands (CMD payload). Any node may send any of these to any other.
+#define MESH_CMD_TEST_FIRE    1   // start a test alarm on the target
+#define MESH_CMD_RECALIBRATE  2   // re-take the target's dust baseline (fire nodes)
+#define MESH_CMD_REBOOT       3   // restart the target
+#define MESH_CMD_STATUS       4   // target sends a heartbeat right now
+#define MESH_CMD_MAX          4
+
+// ACK result codes
+#define MESH_ACK_OK           0
+#define MESH_ACK_UNSUPPORTED  1   // this node has no such function (e.g. recalibrate on the command node)
+#define MESH_ACK_BUSY         2   // not allowed right now (e.g. recalibrate during an alarm)
 
 // flags
 #define MESH_F_SILENCED   0x01   // FIRE: the origin's alarm has been silenced
@@ -67,6 +84,11 @@ struct MeshPacket {
   // HEARTBEAT
   uint8_t  battPct;
   int16_t  tempC10;
+  // CMD / ACK
+  uint8_t  target;        // CMD: node to act. ACK: node that asked (the one being answered)
+  uint8_t  cmd;
+  uint8_t  reqId;         // chosen by the asker, repeated copies of one request share it
+  uint8_t  result;        // ACK only
 };
 
 enum MeshDecodeResult {

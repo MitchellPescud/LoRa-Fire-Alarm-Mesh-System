@@ -6,6 +6,7 @@
 #include "config.h"
 #include "state.h"
 #include "alarm.h"
+#include "node_commands.h"
 
 MeshStats meshStats;
 
@@ -26,6 +27,8 @@ struct MeshPeer {
   uint8_t          battPct;
   int16_t          tempC10;
   uint8_t          flags;
+  bool             hasCmd;       // last remote command executed for this sender (de-duplication)
+  uint8_t          lastCmd, lastReq, lastResult;
 };
 static MeshPeer peers[MESH_MAX_PEERS];
 
@@ -48,6 +51,20 @@ struct MeshCtrlJob {              // CLEAR / SILENCE that is sent several times
   uint32_t nextMs;
 };
 static MeshCtrlJob ctrlJobs[MESH_MAX_CTRL];
+
+struct MeshOutCmd {               // a remote command WE sent, tracked until ACKed / timed out
+  bool     used;
+  uint8_t  target, cmd, reqId;
+  uint8_t  state;                 // MESH_CMDSTATE_*
+  uint8_t  result;                // valid when state == DONE
+  uint8_t  remaining;             // copies still to send
+  uint32_t nextMs;                // next copy
+  uint32_t deadlineMs;            // after the last copy: give up (NOREPLY)
+  uint32_t startedMs;
+  uint32_t doneMs;
+};
+static MeshOutCmd outCmds[MESH_MAX_OUT];
+static uint8_t    nextReqId = 0;
 
 // ---------------------------------------------------------------------------
 // Own identity / counters
@@ -229,6 +246,106 @@ static void queueControl(uint8_t type, uint8_t alarmOrigin, uint16_t episode) {
   }
   // Job table full: send once immediately rather than lose the command.
   sendControl(type, alarmOrigin, episode);
+}
+
+static void sendCmdPacket(uint8_t target, uint8_t cmd, uint8_t reqId) {
+  MeshPacket p;
+  memset(&p, 0, sizeof(p));
+  p.type = MESH_T_CMD;
+  p.ttl = CTRL_TTL;
+  p.target = target;
+  p.cmd = cmd;
+  p.reqId = reqId;
+  sendPacket(p, RADIO_PRIO_HIGH);
+}
+
+static void sendAck(uint8_t requester, uint8_t cmd, uint8_t reqId, uint8_t result) {
+  MeshPacket p;
+  memset(&p, 0, sizeof(p));
+  p.type = MESH_T_ACK;
+  p.ttl = CTRL_TTL;
+  p.target = requester;
+  p.cmd = cmd;
+  p.reqId = reqId;
+  p.result = result;
+  sendPacket(p, RADIO_PRIO_HIGH);
+}
+
+const char *meshCommandName(uint8_t cmd) {
+  switch (cmd) {
+    case MESH_CMD_TEST_FIRE:   return "test fire";
+    case MESH_CMD_RECALIBRATE: return "recalibrate";
+    case MESH_CMD_REBOOT:      return "reboot";
+    case MESH_CMD_STATUS:      return "status";
+    default:                   return "?";
+  }
+}
+
+uint8_t meshCommandFromName(const char *name) {
+  if (!strcmp(name, "fire") || !strcmp(name, "test"))              return MESH_CMD_TEST_FIRE;
+  if (!strcmp(name, "recal") || !strcmp(name, "baseline"))         return MESH_CMD_RECALIBRATE;
+  if (!strcmp(name, "reboot") || !strcmp(name, "restart"))         return MESH_CMD_REBOOT;
+  if (!strcmp(name, "status"))                                     return MESH_CMD_STATUS;
+  return 0;
+}
+
+const char *meshAckName(uint8_t result) {
+  switch (result) {
+    case MESH_ACK_OK:          return "done";
+    case MESH_ACK_UNSUPPORTED: return "not supported by that node";
+    case MESH_ACK_BUSY:        return "refused (busy / alarm active)";
+    default:                   return "?";
+  }
+}
+
+int meshSendCommand(uint8_t target, uint8_t cmd) {
+  if (target == 0 || target == 255 || target == NODE_ADDR) return -1;
+  if (cmd < 1 || cmd > MESH_CMD_MAX) return -1;
+
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    if (outCmds[i].used && outCmds[i].state == MESH_CMDSTATE_PENDING &&
+        outCmds[i].target == target && outCmds[i].cmd == cmd) return 1;
+  }
+  // Free slot, else recycle the oldest finished one. Pending requests are never evicted.
+  MeshOutCmd *slot = nullptr;
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    if (!outCmds[i].used) { slot = &outCmds[i]; break; }
+  }
+  if (!slot) {
+    for (int i = 0; i < MESH_MAX_OUT; i++) {
+      if (outCmds[i].state == MESH_CMDSTATE_PENDING) continue;
+      if (!slot || (int32_t)(outCmds[i].startedMs - slot->startedMs) < 0) slot = &outCmds[i];
+    }
+  }
+  if (!slot) return -2;
+
+  memset(slot, 0, sizeof(*slot));
+  slot->used = true;
+  slot->target = target;
+  slot->cmd = cmd;
+  slot->reqId = nextReqId++;
+  slot->state = MESH_CMDSTATE_PENDING;
+  slot->remaining = CTRL_REPEATS;
+  slot->nextMs = millis();            // first copy goes out on the next meshService()
+  slot->startedMs = millis();
+  slot->deadlineMs = 0;
+  Serial.print("[MESH] command '");
+  Serial.print(meshCommandName(cmd));
+  Serial.print("' -> node ");
+  Serial.println(target);
+  return 0;
+}
+
+int meshCommandState(uint8_t target, uint8_t cmd, uint8_t *result) {
+  const MeshOutCmd *best = nullptr;
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    const MeshOutCmd &o = outCmds[i];
+    if (!o.used || o.target != target || o.cmd != cmd) continue;
+    if (!best || (int32_t)(o.startedMs - best->startedMs) > 0) best = &o;
+  }
+  if (!best) return MESH_CMDSTATE_NONE;
+  if (result) *result = best->result;
+  return best->state;
 }
 
 // Weakest-heard relays first: the stronger the packet was received, the closer
@@ -414,6 +531,72 @@ static void handleSilence(const MeshPacket &p, const uint8_t *raw, uint8_t len, 
   if (p.ttl > 1) relay(raw, len, p.ttl - 1, rssi, RADIO_PRIO_HIGH);
 }
 
+// CMD: act only if addressed to us; everyone else just relays it.
+// `hadWindow` = we had already heard an authentic packet from this sender since
+// our own boot. Without that, a recorded old CMD (e.g. REBOOT) replayed right after
+// we restart would look "new" to our empty replay window; we refuse it, and the
+// sender's remaining copies (higher counters) are accepted a moment later.
+static void handleCmd(const MeshPacket &p, MeshPeer *pe, bool hadWindow, const uint8_t *raw, uint8_t len, int16_t rssi) {
+  meshStats.rxCmd++;
+  if (p.target != NODE_ADDR) {
+    if (p.ttl > 1) relay(raw, len, p.ttl - 1, rssi, RADIO_PRIO_HIGH);
+    return;
+  }
+  if (!hadWindow) { meshStats.rxCmdRejected++; return; }
+
+  // The same request arrives several times (repeats, new counters). Run it once,
+  // but answer every copy so a lost ACK is recovered by the next repeat.
+  if (pe->hasCmd && pe->lastReq == p.reqId && pe->lastCmd == p.cmd) {
+    sendAck(p.origin, p.cmd, p.reqId, pe->lastResult);
+    return;
+  }
+
+  uint8_t result;
+  if (p.cmd == MESH_CMD_STATUS) {
+    sendHeartbeat();
+    result = MESH_ACK_OK;
+  } else {
+    result = nodeCommandExec(p.cmd);
+  }
+  pe->hasCmd = true;
+  pe->lastCmd = p.cmd;
+  pe->lastReq = p.reqId;
+  pe->lastResult = result;
+
+  Serial.print("[MESH] command '");
+  Serial.print(meshCommandName(p.cmd));
+  Serial.print("' from node ");
+  Serial.print(p.origin);
+  Serial.print(": ");
+  Serial.println(meshAckName(result));
+  sendAck(p.origin, p.cmd, p.reqId, result);
+}
+
+// ACK: consumed by the node that asked, relayed by everyone else.
+static void handleAck(const MeshPacket &p, const uint8_t *raw, uint8_t len, int16_t rssi) {
+  meshStats.rxAck++;
+  if (p.target != NODE_ADDR) {
+    if (p.ttl > 1) relay(raw, len, p.ttl - 1, rssi, RADIO_PRIO_HIGH);
+    return;
+  }
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    MeshOutCmd &o = outCmds[i];
+    if (!o.used || o.target != p.origin || o.cmd != p.cmd || o.reqId != p.reqId) continue;
+    if (o.state == MESH_CMDSTATE_DONE) return;
+    o.state = MESH_CMDSTATE_DONE;     // also accepts an ACK that arrives after "no reply"
+    o.result = p.result;
+    o.doneMs = millis();
+    o.remaining = 0;                  // stop sending further copies
+    Serial.print("[MESH] node ");
+    Serial.print(p.origin);
+    Serial.print(" answered '");
+    Serial.print(meshCommandName(p.cmd));
+    Serial.print("': ");
+    Serial.println(meshAckName(p.result));
+    return;
+  }
+}
+
 static void onRadioRx(const uint8_t *raw, uint8_t len, int16_t rssi, int8_t snr) {
   meshStats.rxTotal++;
   meshStats.lastRssi = rssi;
@@ -435,6 +618,7 @@ static void onRadioRx(const uint8_t *raw, uint8_t len, int16_t rssi, int8_t snr)
   MeshPeer *pe = findPeer(p.origin, true);
   if (!pe) { meshStats.rxPeerFull++; return; }
 
+  bool hadWindow = pe->rp.valid;
   MeshReplayResult rr = meshReplayCheck(pe->rp, p.counter);        // authentic, now replay/duplicate
   if (rr == MESH_RP_DUP) { meshStats.rxDup++; return; }
   if (rr == MESH_RP_OLD) { meshStats.rxReplay++; return; }
@@ -450,6 +634,8 @@ static void onRadioRx(const uint8_t *raw, uint8_t len, int16_t rssi, int8_t snr)
     case MESH_T_HEARTBEAT: handleHeartbeat(p, pe, raw, len, rssi); break;
     case MESH_T_CLEAR:     handleClear(p, raw, len, rssi); break;
     case MESH_T_SILENCE:   handleSilence(p, raw, len, rssi); break;
+    case MESH_T_CMD:       handleCmd(p, pe, hadWindow, raw, len, rssi); break;
+    case MESH_T_ACK:       handleAck(p, raw, len, rssi); break;
   }
 }
 
@@ -460,6 +646,8 @@ void meshInit() {
   memset(peers, 0, sizeof(peers));
   memset(alarmTbl, 0, sizeof(alarmTbl));
   memset(ctrlJobs, 0, sizeof(ctrlJobs));
+  memset(outCmds, 0, sizeof(outCmds));
+  nextReqId = (uint8_t)random(0, 256);
   memset(&meshStats, 0, sizeof(meshStats));
 
   Preferences p;
@@ -510,6 +698,27 @@ void meshService() {
     sendControl(j.type, j.alarmOrigin, j.episode);
     if (--j.remaining == 0) j.used = false;
     else j.nextMs = now + CTRL_REPEAT_MS - CTRL_JITTER_MS + random(0, 2 * CTRL_JITTER_MS + 1);
+  }
+
+  // Outgoing remote commands: send the copies, then wait for the ACK.
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    MeshOutCmd &o = outCmds[i];
+    if (!o.used || o.state != MESH_CMDSTATE_PENDING) continue;
+    if (o.remaining > 0) {
+      if ((int32_t)(now - o.nextMs) < 0) continue;
+      sendCmdPacket(o.target, o.cmd, o.reqId);
+      o.remaining--;
+      o.nextMs = now + CTRL_REPEAT_MS - CTRL_JITTER_MS + random(0, 2 * CTRL_JITTER_MS + 1);
+      if (o.remaining == 0) o.deadlineMs = now + CMD_ACK_WAIT_MS;
+    } else if ((int32_t)(now - o.deadlineMs) >= 0) {
+      o.state = MESH_CMDSTATE_NOREPLY;
+      o.doneMs = now;
+      Serial.print("[MESH] no reply from node ");
+      Serial.print(o.target);
+      Serial.print(" to '");
+      Serial.print(meshCommandName(o.cmd));
+      Serial.println("'");
+    }
   }
 
   // Heartbeats are suppressed while any alarm is active (airtime belongs to FIRE).
@@ -564,10 +773,24 @@ String meshStatusJson() {
        + ",\"temp\":" + String(p.tempC10 / 10.0f, 1)
        + ",\"alarm\":" + String((p.flags & MESH_F_ALARM) ? "true" : "false") + "}";
   }
+  j += "],\"cmds\":[";
+  first = true;
+  for (int i = 0; i < MESH_MAX_OUT; i++) {
+    const MeshOutCmd &o = outCmds[i];
+    if (!o.used) continue;
+    if (!first) j += ",";
+    first = false;
+    uint32_t refMs = (o.state == MESH_CMDSTATE_PENDING) ? o.startedMs : o.doneMs;
+    j += "{\"node\":" + String(o.target) + ",\"cmd\":" + String(o.cmd) + ",\"id\":" + String(o.reqId)
+       + ",\"state\":" + String(o.state) + ",\"result\":" + String(o.result)
+       + ",\"age\":" + String((now - refMs) / 1000) + "}";
+  }
   j += "],\"stats\":{";
   j += "\"rx\":" + String(meshStats.rxTotal) + ",\"tx\":" + String(meshStats.txOriginated)
      + ",\"relayed\":" + String(meshStats.txRelayed) + ",\"dup\":" + String(meshStats.rxDup)
      + ",\"replay\":" + String(meshStats.rxReplay) + ",\"authFail\":" + String(meshStats.rxAuthFail)
+     + ",\"cmdRx\":" + String(meshStats.rxCmd) + ",\"ackRx\":" + String(meshStats.rxAck)
+     + ",\"cmdRejected\":" + String(meshStats.rxCmdRejected)
      + ",\"clearedDrop\":" + String(meshStats.rxClearedDrop) + ",\"foreign\":" + String(meshStats.rxBadMagic)
      + ",\"crcErr\":" + String(radioStats.rxCrcError) + ",\"txTimeout\":" + String(radioStats.txTimeout)
      + ",\"txDropped\":" + String(radioStats.txDropped) + ",\"lbtDefers\":" + String(radioStats.txDeferred)

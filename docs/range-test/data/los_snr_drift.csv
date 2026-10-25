@@ -1,0 +1,6 @@
+point,sf,position_note,received,snr_seq_00_09,snr_seq_10_19,snr_seq_20_29,snr_seq_30_39,snr_seq_40_49,snr_seq_50_59,snr_seq_60_69,snr_seq_70_79,snr_seq_80_89,snr_seq_90_99
+1,9,on the line of sight,100,-6.5,-4.3,-5.6,-6.2,-5.3,-0.3,-1.1,-0.4,-0.1,-1.4
+2,9,about 1 m left of the line of sight,72,-13.7,-15.0,-12.6,-14.4,-15.3,-7.6,-8.1,-12.9,-12.8,-13.6
+3,9,on the line of sight,98,-8.8,-1.7,-2.8,-4.9,-6.5,-9.3,-3.4,-3.7,-3.8,-2.4
+4,11,on the line of sight,100,-5.1,-7.4,-5.9,-4.5,-2.5,-5.0,-7.8,-10.0,-3.0,-5.3
+5,11,about 1 m left of the line of sight,90,-17.3,-11.2,-8.7,-8.9,-6.6,-8.2,-11.0,-12.6,-6.9,-7.8

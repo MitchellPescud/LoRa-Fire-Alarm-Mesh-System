@@ -1,0 +1,6 @@
+session,point,run,env,dist,sf,bw,pwr,total,got,pdr,ci_lo,ci_hi,avg_rssi,sig,min_rssi,avg_snr,min_snr,path_loss,inferred,dist_src,gps_spread,note
+los_log,1,62586,,698.726,9,125,10,100,100,1.0,0.963,1.0,-99.46,-104.503,-102.0,-3.12,-11.0,118.503,False,gps,1.047,on the line of sight
+los_log,3,35888,,699.02,9,125,10,100,98,0.98,0.93,0.994,-100.316,-106.475,-103.0,-4.694,-15.0,120.475,False,gps,0.879,on the line of sight
+los_log,4,57236,,699.111,11,125,10,100,100,1.0,0.963,1.0,-101.06,-107.897,-103.0,-5.65,-18.0,121.897,False,gps,1.04,on the line of sight
+los_log,5,42345,,699.246,11,125,10,100,90,0.9,0.826,0.945,-101.822,-111.936,-103.0,-9.511,-20.0,125.936,False,gps,0.839,taken ~1 m left of the actual line of sight (user-reported; GPS cannot resolve)
+los_log,2,35720,,699.317,9,125,10,100,72,0.72,0.625,0.799,-102.069,-114.438,-103.0,-12.014,-16.0,128.438,False,gps,1.474,taken ~1 m left of the actual line of sight (user-reported; GPS cannot resolve)

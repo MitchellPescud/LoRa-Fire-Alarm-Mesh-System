@@ -1,8 +1,19 @@
 /*
   ============================================================================
-  Fire Alarm Node - V5 (LoRa mesh + WiFi dashboard + node-to-node commands)
+  Fire Alarm Node - V6 (V5 + filtered battery reading + low power mode)
   Board: Heltec WiFi LoRa 32 V4.3 (ESP32-S3 + SX1262 + KCT8103L front-end)
   ============================================================================
+
+  V6 adds two things on top of V5 (the mesh, radio and sensing code is untouched):
+    * Battery reading is filtered (16-sample trimmed-mean bursts -> median of
+      the last 9 readings -> EMA, plus a 2-point display deadband) so the
+      percentage no longer jumps around by ~5%. See battery_filter.h / config.h.
+    * Low power mode (power.*): lower CPU clock, loop idles 1 ms per pass, OLED
+      off unless an alarm is active or the USER button / WiFi switch woke it.
+      Setting off / on / auto (auto = node booted without external 5V), saved in
+      flash; serial command "lowpower [on|off|auto]". The radio stays in
+      continuous receive and the dust sensor keeps pulsing, so detection and
+      mesh behaviour do not change.
 
   V4 (sensing, alarm, WiFi dashboard, LoRa mesh with no gateway) plus V5:
   ANY node can command ANY other node. A command (test fire, recalibrate
@@ -38,7 +49,9 @@
     dust_sensor.*       - GP2Y1010AU0F pulse train, calibration, smoke eval,
                           5V-line sense -> boost enable
     alarm.*             - buzzer + alarm LED, local trigger/clear/silence
-    battery.*, temp_sensor.*, display.*
+    battery.*           - filtered VBAT reading (maths in battery_filter.h)
+    power.*             - low power mode (CPU clock, idle, OLED off)
+    temp_sensor.*, display.*
     serial_commands.*   - fire / clear / silence / mesh / baseline over Serial
     wifi_dashboard.*    - WiFi AP + web dashboard (WiFi switch on GPIO16)
 
@@ -51,6 +64,8 @@
     silence  mute buzzers on every node, alarms stay active
     mesh     print peers, active alarms and packet counters
     baseline recalibrate the dust sensor
+    lowpower [on|off|auto]   show / set low power mode
+    battery  print filtered vs instant battery voltage
     cmd <node> <fire|recal|reboot|status>   run a command on another node
   ============================================================================
 */
@@ -60,6 +75,7 @@
 #include "display.h"
 #include "temp_sensor.h"
 #include "battery.h"
+#include "power.h"
 #include "dust_sensor.h"
 #include "alarm.h"
 #include "serial_commands.h"
@@ -73,8 +89,8 @@ void setup() {
   delay(200);
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);   // Heltec framework init (radio SPI, timers) - must precede Radio.Init()
   Serial.println();
-  Serial.println("[BOOT] Fire node starting (V5: LoRa mesh + WiFi dashboard + node commands)");
-  Serial.println("[BOOT] Commands: fire | clear | silence | mesh | baseline | cmd <node> <fire|recal|reboot|status>");
+  Serial.println("[BOOT] Fire node starting (V6: LoRa mesh + WiFi dashboard + node commands + low power mode)");
+  Serial.println("[BOOT] Commands: fire | clear | silence | mesh | baseline | cmd <node> <fire|recal|reboot|status> | lowpower [on|off|auto] | battery");
 
   pinMode(PIN_VEXT_CTRL, OUTPUT);
   digitalWrite(PIN_VEXT_CTRL, LOW);   // power on Vext rail (OLED + BMP280) before I2C use
@@ -82,7 +98,8 @@ void setup() {
 
   alarmInit();
   dustSensorInit();     // 5V-sense read decides boost enable, then LED pin setup
-  batteryInit();
+  batteryInit();        // enables the VBAT divider and seeds the battery filter
+  powerInit();          // needs usbPowerDetected from dustSensorInit(); loads saved low power setting
 
   tempSensorInit();     // Wire.begin() + BMP280
   displayInit();        // display.init() + splash screen
@@ -98,6 +115,8 @@ void loop() {
   meshService();             // radio IRQs, RX, TX queue, FIRE re-announce, heartbeats, remote commands
   nodeCommandService();      // scheduled work from remote commands (recalibrate, reboot)
   handleWifiSwitch();
+  powerService();            // CPU clock follows low power mode / WiFi state, USER button wakes the OLED
+  batteryService();          // filtered battery reading (own timer, independent of the OLED)
   handleSerialCommand();
   handleFireState();
   serviceDustPulseTrain();   // keeps the GP2Y1010's ~10ms pulse train running at all times
@@ -105,4 +124,5 @@ void loop() {
   handleTemp();
   handleDisplay();
   handleWebServer();
+  powerIdle();               // low power mode: 1 ms sleep so the core idles between passes
 }

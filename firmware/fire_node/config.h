@@ -30,6 +30,9 @@
 #define PIN_VBAT          1    // ADC1_CH0, battery voltage via onboard divider
 #define PIN_ADC_CTRL      37   // HIGH = enable VBAT divider
 #define PIN_VEXT_CTRL     36   // LOW = Vext (3.3V rail: OLED + BMP280) powered on
+#define PIN_USER_BTN      0    // board's PRG/USER button (active LOW, board has its own pull-up). Low power mode:
+                               // press to wake the OLED. -1 disables. GPIO0 is a boot-strapping pin, but only
+                               // while the chip resets - it is a normal input afterwards.
 
 // ---------------------------------------------------------------------------
 // Node identity / WiFi access point / dashboard
@@ -37,7 +40,7 @@
 #define FN_XSTR(x) #x
 #define FN_STR(x)  FN_XSTR(x)
 #ifndef NODE_ADDR
-#define NODE_ADDR        2                      // UNIQUE per fire node (1..99). Command node = 100.
+#define NODE_ADDR        1                      // UNIQUE per fire node (1..99). Command node = 100.
 #endif
 #define NODE_ID          "node" FN_STR(NODE_ADDR)
 #define WIFI_AP_SSID     "FireNode" FN_STR(NODE_ADDR)
@@ -132,6 +135,46 @@ const float VBAT_EMPTY         = 3.3;   // volts = 0% (Table 3.2 min battery vol
 const float VBAT_FULL          = 4.2;   // volts = 100%
 const float ADC_REF_VOLTAGE    = 3.3;
 const int   ADC_RESOLUTION     = 4095;  // 12-bit ADC
+
+// ---------------------------------------------------------------------------
+// Battery reading filter (V6) - see battery_filter.h for what each stage fixes.
+// A single analogRead() through the 390k/100k divider is multiplied by ~5.36,
+// so a few counts of ADC noise already shows up as several percent, and the
+// LoRa PA / WiFi pull enough current (datasheet: ~290 mA at 14 dBm TX) to sag
+// the cell by tens of millivolts for the length of a packet.
+//   reading  = BATT_BURST_SAMPLES samples, BATT_BURST_TRIM dropped at each end
+//   filtered = median of the last BATT_MEDIAN_WINDOW readings, then EMA
+// Defaults: a reading every 500 ms, window 9 -> any disturbance shorter than
+// ~2 s is rejected; EMA 0.25 -> ~2 s extra smoothing; whole thing settles in
+// roughly 5-8 s, far faster than a cell actually drains.
+// ---------------------------------------------------------------------------
+const int           BATT_BURST_SAMPLES     = 16;
+const int           BATT_BURST_TRIM        = 3;      // drop this many lowest AND highest
+const unsigned int  BATT_BURST_GAP_US      = 100;
+const unsigned long BATT_SAMPLE_MS         = 500;    // one reading per this
+const int           BATT_MEDIAN_WINDOW     = 9;      // readings (odd number; max 31)
+const float         BATT_EMA_ALPHA         = 0.25f;  // weight of each new median (smaller = smoother)
+const int           BATT_PCT_DEADBAND      = 2;      // displayed % moves only when it changes by at least this
+const int           BATT_SEED_BURSTS       = 4;      // bursts averaged at boot to seed the filter
+const unsigned int  BATT_DIVIDER_SETTLE_MS = 20;     // after enabling ADC_CTRL, before the first read
+
+// ---------------------------------------------------------------------------
+// Low power mode (V6) - see power.cpp. Applies when the node runs from its
+// battery. Setting: OFF / ON / AUTO, saved in flash, changed with the serial
+// command "lowpower [on|off|auto]". AUTO = on whenever the node booted
+// without external 5V (same boot-time check that decides the boost converter).
+// What it changes - and only this; mesh, radio and smoke sensing run exactly
+// as before, so every alert is still received, relayed and detected:
+//   * CPU clock 240 -> LP_CPU_MHZ (LP_CPU_MHZ_WIFI while the WiFi AP is up;
+//     the WiFi driver needs >= 80 MHz)
+//   * loop() sleeps 1 ms per pass so the core idles instead of spinning
+//   * OLED switched off; wakes on any alarm, the USER button, or the WiFi switch
+// ---------------------------------------------------------------------------
+#define LOWPOWER_DEFAULT_SETTING 2                    // 0 = OFF, 1 = ON, 2 = AUTO
+const uint32_t      LP_CPU_MHZ             = 80;      // CPU clock while in low power mode (80 / 160 / 240)
+const uint32_t      LP_CPU_MHZ_WIFI        = 160;     // ... while the WiFi AP is running
+const unsigned long LP_DISPLAY_WAKE_MS     = 15000;   // how long the OLED stays on after a wake
+const unsigned long LP_BUTTON_DEBOUNCE_MS  = 50;
 
 // ---------------------------------------------------------------------------
 // 5V line sense (PIN_FIVE_V_SENSE): a 10k/10k divider off the board's 5V

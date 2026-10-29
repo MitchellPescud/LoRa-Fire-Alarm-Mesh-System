@@ -18,7 +18,8 @@ extern float lastTemp;
 
 // ---- Battery (owned by battery.cpp) ----
 extern int   batteryPercent;
-extern float batteryVoltage;
+extern float batteryVoltage;          // FILTERED (V6) - what everything else should use
+extern float batteryVoltageInstant;   // unfiltered burst, diagnostics only
 
 // ---- Power source (owned by dust_sensor.cpp, set once at boot) ----
 extern bool  usbPowerDetected;   // true if external 5V was present on PIN_FIVE_V_SENSE at boot

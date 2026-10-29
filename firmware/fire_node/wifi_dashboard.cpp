@@ -9,6 +9,7 @@
 #include "mesh.h"
 #include "mesh_proto.h"
 #include "net_panel.h"
+#include "power.h"
 
 static WebServer server(WEB_SERVER_PORT);
 static bool lastSwitchOn = false;   // for edge-detection, so we only start/stop the AP on a change
@@ -109,6 +110,7 @@ function refresh() {
     document.getElementById('power').textContent = d.extPower
       ? ('External 5V ' + d.fiveV.toFixed(2) + 'V' + (d.fiveVLow ? ' (LOW!)' : ''))
       : 'Battery (boost)';
+    if (d.lowPower) document.getElementById('power').textContent += ' - low power mode';
     document.getElementById('smoke').textContent = d.dustRaw + ' / ' + d.dustDelta
       + (d.baselineReady ? '' : ' (calibrating...)');
 
@@ -200,6 +202,7 @@ static void handleStatus() {
   json += "\"tempC\":" + String(bmpOk ? lastTemp : 0.0f, 1) + ",";
   json += "\"battPercent\":" + String(batteryPercent) + ",";
   json += "\"battVoltage\":" + String(batteryVoltage, 2) + ",";
+  json += "\"lowPower\":" + String(lowPowerActive() ? "true" : "false") + ",";
   json += "\"dustRaw\":" + String(dustRawLast) + ",";
   json += "\"dustBaseline\":" + String(dustBaseline) + ",";
   json += "\"dustDelta\":" + String(dustRawLast - dustBaseline) + ",";

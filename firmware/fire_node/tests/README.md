@@ -11,6 +11,10 @@ The Arduino IDE ignores this folder. Run from `tests/` on a PC with g++:
     g++ -std=c++14 -Wall -Wno-unused-variable -Wno-unused-function -Istubs sim_mesh.cpp -o sim_mesh && ./sim_mesh
     ./sim_mesh -v     # also prints every node's serial output
 
+    # V6 battery filter (burst trimmed-mean -> median window -> EMA -> display deadband),
+    # uses the real constants from ../config.h and a simulated noisy ADC + TX current sag
+    g++ -std=c++11 -Wall -I.. test_battery.cpp -o test_battery && ./test_battery
+
 The simulator covers: heartbeat/peer discovery over a relay, FIRE across a
 line topology, silence, network-wide clear, re-arm hold-off, new episode after
 clear, replayed CLEAR, forged/foreign packets, command-node clear, hidden-node

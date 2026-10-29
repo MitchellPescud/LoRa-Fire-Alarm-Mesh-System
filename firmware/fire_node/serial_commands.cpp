@@ -5,11 +5,14 @@
 #include "alarm.h"
 #include "dust_sensor.h"
 #include "mesh.h"
+#include "power.h"
 
 // ---------------------------------------------------------------------------
 // Serial commands: fire (test trigger) / clear (reset latch) / silence (mute
 // buzzers network-wide) / mesh (print mesh status) / baseline (recalibrate) /
-// cmd <node> <fire|recal|reboot|status> (run a command on another node). Mirrors the actions on the web dashboard (see
+// cmd <node> <fire|recal|reboot|status> (run a command on another node) /
+// lowpower [on|off|auto] (V6: show or set low power mode) / battery (V6: raw
+// vs filtered battery reading). Mirrors the actions on the web dashboard (see
 // wifi_dashboard.cpp) - kept in sync manually since they're small.
 // ---------------------------------------------------------------------------
 void handleSerialCommand() {
@@ -56,6 +59,31 @@ void handleSerialCommand() {
       if (r == 1) Serial.println("[INFO] That command is already pending for that node");
       else if (r < 0) Serial.println("[WARN] Cannot send (bad node, or command table full)");
     }
+  } else if (cmd == "lowpower" || cmd.startsWith("lowpower ")) {
+    String arg = (cmd.length() > 8) ? cmd.substring(9) : String("");
+    arg.trim();
+    if (arg == "on")        lowPowerSet(LP_SET_ON);
+    else if (arg == "off")  lowPowerSet(LP_SET_OFF);
+    else if (arg == "auto") lowPowerSet(LP_SET_AUTO);
+    else if (arg.length() == 0) {
+      Serial.print("[POWER] setting=");
+      Serial.print(lowPowerSettingName());
+      Serial.print(" active=");
+      Serial.print(lowPowerActive() ? "yes" : "no");
+      Serial.print(" cpu=");
+      Serial.print(getCpuFrequencyMhz());
+      Serial.println("MHz   (usage: lowpower on|off|auto)");
+    } else {
+      Serial.println("[INFO] Usage: lowpower [on|off|auto]");
+    }
+  } else if (cmd == "battery") {
+    Serial.print("[BATT] filtered=");
+    Serial.print(batteryVoltage, 3);
+    Serial.print("V ");
+    Serial.print(batteryPercent);
+    Serial.print("%   instant=");
+    Serial.print(batteryVoltageInstant, 3);
+    Serial.println("V");
   } else if (cmd == "baseline") {
     if (fireActive) {
       Serial.println("[WARN] Cannot recalibrate while the alarm is active - clear it first");

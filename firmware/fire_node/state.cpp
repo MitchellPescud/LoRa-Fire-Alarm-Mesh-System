@@ -5,6 +5,7 @@ float lastTemp = NAN;
 
 int   batteryPercent = 0;
 float batteryVoltage = 0.0f;
+float batteryVoltageInstant = 0.0f;
 
 bool  usbPowerDetected = false;
 bool  usbVoltageLow    = false;

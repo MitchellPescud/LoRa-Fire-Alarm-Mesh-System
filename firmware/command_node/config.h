@@ -40,7 +40,7 @@
 #endif
 #define NODE_ID          "command"
 #define WIFI_AP_SSID     "FireCommand"
-#define WIFI_AP_PASSWORD "firecommand123"       // CALIBRATE: change before real use - WPA2, 8+ chars.
+#define WIFI_AP_PASSWORD "change-me-before-use"       // CALIBRATE: change before real use - WPA2, 8+ chars.
                                                 // Anyone on this network can clear fire alarms!
 #define WEB_SERVER_PORT  80
 

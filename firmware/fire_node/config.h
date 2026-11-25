@@ -44,7 +44,7 @@
 #endif
 #define NODE_ID          "node" FN_STR(NODE_ADDR)
 #define WIFI_AP_SSID     "FireNode" FN_STR(NODE_ADDR)
-#define WIFI_AP_PASSWORD "firealarm123"   // CALIBRATE: change before real deployment - WPA2, 8+ chars
+#define WIFI_AP_PASSWORD "change-me-before-use"   // CALIBRATE: change before real deployment - WPA2, 8+ chars
 #define WEB_SERVER_PORT  80
 
 // ---------------------------------------------------------------------------

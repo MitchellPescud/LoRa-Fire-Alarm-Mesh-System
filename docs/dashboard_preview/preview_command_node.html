@@ -1,0 +1,254 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire Command</title>
+<style>
+  body { font-family: sans-serif; background:#111; color:#eee; margin:0; padding:16px; max-width:760px; }
+  h1 { font-size:1.3em; margin:0 0 2px 0; }
+  .sub { color:#888; font-size:0.85em; margin-bottom:12px; }
+  .banner { border-radius:8px; padding:14px; font-size:1.3em; font-weight:bold; margin-bottom:12px; background:#173d22; color:#6e6; }
+  .banner.fire { background:#5a1414; color:#ff6b6b; }
+  .global { display:flex; gap:8px; margin-bottom:12px; }
+  .global button { padding:11px 14px; border:none; border-radius:6px; font-size:0.95em; cursor:pointer; flex:1; color:#fff; }
+  .global button:disabled { background:#333 !important; color:#777; cursor:not-allowed; }
+  .gsil { background:#cc8822; }
+  .gclr { background:#22aa44; }
+
+  #net .card { background:#1c1c1c; border-radius:8px; padding:14px; margin-bottom:12px; }
+  #net .card.alarm { border:2px solid #ff4444; }
+  #net .card.stale { border:2px solid #b8860b; }
+  #net .head { display:flex; justify-content:space-between; align-items:center; }
+  #net .name { font-size:1.2em; font-weight:bold; }
+  #net .pill { font-size:0.8em; padding:3px 9px; border-radius:10px; background:#2a2a2a; color:#aaa; }
+  #net .pill.ok { background:#173d22; color:#6e6; }
+  #net .pill.alarm { background:#5a1414; color:#ff6b6b; }
+  #net .pill.stale { background:#4a3a0a; color:#e0b040; }
+  #net .pill.sil { background:#4a3a0a; color:#e0b040; margin-left:6px; }
+  #net .meta { color:#999; font-size:0.85em; margin:6px 0 10px 0; line-height:1.5; }
+  #net .btns { display:flex; gap:8px; margin-bottom:8px; }
+  #net .btns:last-child { margin-bottom:0; }
+  #net button { padding:10px 8px; border:none; border-radius:6px; font-size:0.9em; cursor:pointer; flex:1; width:auto; margin:0; color:#fff; }
+  #net button:disabled { background:#333 !important; color:#777; cursor:not-allowed; }
+  #net .sil { background:#cc8822; }
+  #net .clr { background:#22aa44; }
+  #net .cmd { background:#2d4f7c; }
+  #net .cmd.warn { background:#7c3a2d; }
+  #net .last { color:#9cf; font-size:0.85em; margin-bottom:8px; min-height:1.1em; }
+  #net .label { color:#888; font-size:0.85em; }
+  #net pre { background:#000; border-radius:4px; padding:8px; margin:8px 0 0 0; color:#8f8; font-size:0.75em;
+        height:150px; overflow-y:auto; white-space:pre-wrap; }
+  #netmsg { font-size:0.85em; color:#aaa; min-height:1.2em; margin-bottom:8px; }
+
+</style>
+</head>
+<body>
+<h1>Fire Command</h1>
+<div class="sub" id="sub">--</div>
+<div class="banner" id="banner">--</div>
+<div class="global">
+  <button class="gsil" id="silAll" onclick="netAct('silence', 0)">Silence all</button>
+  <button class="gclr" id="clrAll" onclick="netAct('clear', 0)">Clear all alarms</button>
+</div>
+
+<div id="net">
+  <div id="netmsg"></div>
+  <div id="nodes"></div>
+  <div class="card">
+    <div class="label">Network events</div>
+    <pre id="netlog"></pre>
+  </div>
+  <div class="card">
+    <div class="label">Radio / mesh counters</div>
+    <div class="meta" id="netstats">--</div>
+  </div>
+</div>
+<script>
+// PREVIEW ONLY: fake /status and POST replies so the page works without a board.
+(function(){
+  const t0=Date.now(); let cmds=[]; let id=0;
+  const cmdAt={};
+  window.fetch=function(url,opt){
+    const u=new URL(url,'http://x'); const age=Math.floor((Date.now()-t0)/1000);
+    const text=s=>Promise.resolve({text:()=>Promise.resolve(s),json:()=>Promise.resolve(JSON.parse(s))});
+    if(u.pathname==='/cmd'){ const c={node:+u.searchParams.get('node'),cmd:+u.searchParams.get('cmd'),id:id++,state:0,result:0,t:Date.now()}; cmds.push(c);
+      setTimeout(()=>{ if(c.node===3){c.state=2}else{c.state=1; c.result=(c.cmd===2&&c.node===2)?1:0} c.t=Date.now(); }, 3000);
+      return text('Sent - waiting for node '+c.node+' to reply'); }
+    if(u.pathname==='/silence'||u.pathname==='/clear') return text('OK (preview)');
+    if(u.pathname==='/fire'||u.pathname==='/baseline') return text('OK (preview)');
+    const st={nodeId:'node1',addr:100,ssid:'Preview',ip:'192.168.4.1',fireActive:true,hasTemp:true,tempC:24.3,battPercent:82,battVoltage:3.95,dustRaw:420,dustBaseline:400,dustDelta:20,extPower:false,fiveVLow:false,fiveV:0,baselineReady:true,
+     mesh:{addr:100,epoch:3,localEpisode:-1,alarms:[{origin:2,episode:4,silenced:false}],
+      peers:[{id:1,age:12,stale:false,rssi:-72,snr:8,hops:0,hb:true,batt:91,ext:false,hasTemp:true,temp:23.1,alarm:false},
+             {id:2,age:3,stale:false,rssi:-95,snr:2,hops:1,hb:true,batt:255,ext:true,hasTemp:true,temp:31.5,alarm:true},
+             {id:3,age:140,stale:true,rssi:-108,snr:-4,hops:2,hb:true,batt:34,ext:false,hasTemp:false,temp:0,alarm:false}],
+      cmds:cmds.map(c=>({node:c.node,cmd:c.cmd,id:c.id,state:c.state,result:c.result,age:Math.floor((Date.now()-c.t)/1000)})),
+      stats:{rx:120,tx:30,relayed:44,dup:51,replay:0,authFail:0,foreign:0,crcErr:1,txTimeout:0,txDropped:0,lbtDefers:2,cmdRx:0,ackRx:2,rssi:-80,snr:6}}};
+    return text(JSON.stringify(st)); };
+})();
+</script>
+
+<script>
+
+const CMD_NAME = { 1: 'Test fire', 2: 'Recalibrate', 3: 'Reboot', 4: 'Status' };
+const ACK_TEXT = { 0: 'done', 1: 'not supported by that node', 2: 'refused (busy / alarm active)' };
+let netStarted = false;
+let netSeenNode = {};     // id -> true once seen
+let netWasStale = {};     // id -> bool
+let netSeenAlarm = {};    // "origin:episode" -> silenced?
+let netSeenCmd = {};      // "node:id:cmd" -> last state logged
+
+function netLog(text) {
+  const el = document.getElementById('netlog');
+  el.textContent += new Date().toLocaleTimeString() + '  ' + text + '\n';
+  const lines = el.textContent.split('\n');
+  if (lines.length > 80) el.textContent = lines.slice(lines.length - 80).join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
+function netAct(kind, node) {
+  const what = node ? ('node ' + node) : 'ALL nodes';
+  if (kind === 'clear' && !confirm('Clear the alarm on ' + what + ' for the whole network?')) return;
+  const msg = document.getElementById('netmsg');
+  msg.textContent = '';
+  fetch('/' + kind + '?node=' + node, { method: 'POST' }).then(r => r.text()).then(t => {
+    msg.textContent = t;
+    netLog((kind === 'clear' ? 'CLEAR' : 'SILENCE') + ' sent for ' + what + ' - ' + t);
+    if (typeof refresh === 'function') refresh();
+  }).catch(() => { msg.textContent = 'Request failed'; });
+}
+
+function netCmd(node, cmd) {
+  if (cmd === 1 && !confirm('Start a TEST fire alarm on node ' + node + '? Every buzzer in the network will sound.')) return;
+  if (cmd === 3 && !confirm('Reboot node ' + node + '? It will be offline for about 30 seconds.')) return;
+  if (cmd === 2 && !confirm('Recalibrate the dust baseline on node ' + node + '? Make sure the air near it is smoke-free.')) return;
+  const msg = document.getElementById('netmsg');
+  msg.textContent = '';
+  fetch('/cmd?node=' + node + '&cmd=' + cmd, { method: 'POST' }).then(r => r.text()).then(t => {
+    msg.textContent = t;
+    netLog(CMD_NAME[cmd] + ' requested for node ' + node + ' - ' + t);
+    if (typeof refresh === 'function') refresh();
+  }).catch(() => { msg.textContent = 'Request failed'; });
+}
+
+function lastCmdLine(id, cmds) {
+  const mine = cmds.filter(c => c.node === id).sort((a, b) => a.age - b.age);
+  if (!mine.length) return '';
+  const c = mine[0];
+  const name = CMD_NAME[c.cmd] || ('command ' + c.cmd);
+  if (c.state === 0) return name + ': sent, waiting for reply... (' + c.age + 's)';
+  if (c.state === 1) return name + ': ' + (ACK_TEXT[c.result] || ('result ' + c.result)) + ' (' + c.age + 's ago)';
+  return name + ': no reply - node out of range, off, or the reply was lost (' + c.age + 's ago)';
+}
+
+function nodeCard(id, p, alarms, cmds) {
+  const inAlarm = alarms.length > 0 || (p && p.alarm);
+  const stale = p && p.stale && !inAlarm;
+  const allSil = alarms.length > 0 && alarms.every(a => a.silenced);
+  const cls = 'card' + (inAlarm ? ' alarm' : (stale ? ' stale' : ''));
+  let pill = inAlarm ? '<span class="pill alarm">FIRE</span>' : (stale ? '<span class="pill stale">UNKNOWN</span>' : '<span class="pill ok">OK</span>');
+  if (allSil) pill += '<span class="pill sil">buzzer silenced</span>';
+  const meta = [];
+  if (p) {
+    meta.push('heard ' + p.age + 's ago via ' + (p.hops === 0 ? 'direct link' : p.hops + ' hop' + (p.hops > 1 ? 's' : '')));
+    meta.push('rssi ' + p.rssi + ' dBm, snr ' + p.snr + ' dB (last hop)');
+    if (p.hb) {
+      const h = [];
+      if (p.batt <= 100) h.push('battery ' + p.batt + '%');
+      h.push(p.ext ? 'on external power' : 'on battery / no 5V');
+      if (p.hasTemp) h.push(p.temp.toFixed(1) + ' C');
+      meta.push(h.join(' | '));
+    } else {
+      meta.push('no heartbeat yet');
+    }
+    if (stale) meta.push('no heartbeat for over 100 s - status unknown, not necessarily safe');
+  } else {
+    meta.push('alarm heard via the mesh; no heartbeat received from this node');
+  }
+  alarms.forEach(a => meta.push('alarm episode ' + a.episode + (a.silenced ? ' (silenced)' : '')));
+  const dis = alarms.length ? '' : 'disabled';
+  return '<div class="' + cls + '"><div class="head"><span class="name">Node ' + id + '</span><span>' + pill + '</span></div>'
+    + '<div class="meta">' + meta.join('<br>') + '</div>'
+    + '<div class="btns"><button class="sil" ' + dis + ' onclick="netAct(\'silence\',' + id + ')">Silence</button>'
+    + '<button class="clr" ' + dis + ' onclick="netAct(\'clear\',' + id + ')">Clear alarm</button></div>'
+    + '<div class="btns">'
+    + '<button class="cmd" onclick="netCmd(' + id + ',4)">Status</button>'
+    + '<button class="cmd" onclick="netCmd(' + id + ',2)">Recalibrate</button>'
+    + '<button class="cmd warn" onclick="netCmd(' + id + ',1)">Test fire</button>'
+    + '<button class="cmd warn" onclick="netCmd(' + id + ',3)">Reboot</button></div>'
+    + '<div class="last">' + lastCmdLine(id, cmds) + '</div></div>';
+}
+
+// d = parsed /status JSON (needs d.mesh). Draws the node cards, log and counters.
+function netRefresh(d) {
+  const m = d.mesh;
+  const self = m.addr;
+  const cmds = m.cmds || [];
+  const nodes = {};
+  m.peers.forEach(p => { if (p.id !== self) nodes[p.id] = { p: p, alarms: [] }; });
+  m.alarms.forEach(a => { if (a.origin !== self) (nodes[a.origin] = nodes[a.origin] || { p: null, alarms: [] }).alarms.push(a); });
+  const ids = Object.keys(nodes).map(Number).sort((a, b) => a - b);
+  document.getElementById('nodes').innerHTML = ids.length
+    ? ids.map(id => nodeCard(id, nodes[id].p, nodes[id].alarms, cmds)).join('')
+    : '<div class="card"><div class="meta">No other nodes heard yet. Nodes send a heartbeat about every 30 s.</div></div>';
+
+  ids.forEach(id => {
+    const p = nodes[id].p;
+    if (!netSeenNode[id]) { netSeenNode[id] = true; netLog('Node ' + id + (netStarted ? ' appeared' : ' heard')); }
+    const st = !!(p && p.stale);
+    if (netWasStale[id] !== undefined && netWasStale[id] !== st) netLog('Node ' + id + (st ? ' went UNKNOWN (no heartbeat)' : ' is back'));
+    netWasStale[id] = st;
+  });
+  const cur = {};
+  m.alarms.forEach(a => {
+    const k = a.origin + ':' + a.episode;
+    cur[k] = a.silenced;
+    if (netSeenAlarm[k] === undefined) netLog('FIRE from node ' + a.origin + ' (episode ' + a.episode + ')');
+    else if (!netSeenAlarm[k] && a.silenced) netLog('Alarm on node ' + a.origin + ' silenced');
+  });
+  Object.keys(netSeenAlarm).forEach(k => { if (cur[k] === undefined) netLog('Alarm on node ' + k.split(':')[0] + ' ended (cleared)'); });
+  netSeenAlarm = cur;
+  cmds.forEach(c => {
+    const k = c.node + ':' + c.id + ':' + c.cmd;
+    if (netSeenCmd[k] !== c.state && c.state !== 0) {
+      netLog((CMD_NAME[c.cmd] || 'Command') + ' on node ' + c.node + ': '
+        + (c.state === 1 ? (ACK_TEXT[c.result] || 'result ' + c.result) : 'NO REPLY'));
+    }
+    netSeenCmd[k] = c.state;
+  });
+  netStarted = true;
+
+  const s = m.stats;
+  document.getElementById('netstats').textContent = 'node ' + m.addr + '  rx ' + s.rx + '  tx ' + s.tx + '  relayed ' + s.relayed
+    + '  dup ' + s.dup + '  replay ' + s.replay + '  authFail ' + s.authFail + '  foreign ' + s.foreign
+    + '  crcErr ' + s.crcErr + '  lbt ' + s.lbtDefers + '  cmdRx ' + s.cmdRx + '  ackRx ' + s.ackRx
+    + '  | last rssi ' + s.rssi + ' snr ' + s.snr;
+}
+
+function refresh() {
+  fetch('/status').then(r => r.json()).then(d => {
+    const m = d.mesh;
+    document.getElementById('sub').textContent = 'Command node ' + d.addr + '  |  AP ' + d.ssid + '  |  ' + d.ip;
+
+    const ban = document.getElementById('banner');
+    if (m.alarms.length) {
+      const names = [...new Set(m.alarms.map(a => a.origin))].map(o => 'node ' + o).join(', ');
+      ban.textContent = 'FIRE - ' + names;
+      ban.className = 'banner fire';
+    } else {
+      ban.textContent = 'All clear';
+      ban.className = 'banner';
+    }
+    document.getElementById('silAll').disabled = !m.alarms.length;
+    document.getElementById('clrAll').disabled = !m.alarms.length;
+
+    netRefresh(d);
+  }).catch(() => {});
+}
+
+setInterval(refresh, 1000);
+refresh();
+</script>
+</body>
+</html>

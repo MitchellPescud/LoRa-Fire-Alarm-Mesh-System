@@ -1,0 +1,16 @@
+name: Host tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/fire_node/tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Protocol tests
+        run: g++ -std=c++11 -Wall -I.. test_proto.cpp ../mesh_proto.cpp -o test_proto && ./test_proto
+      - name: Mesh simulator
+        run: g++ -std=c++14 -Wall -Wno-unused-variable -Wno-unused-function -Istubs sim_mesh.cpp -o sim_mesh && ./sim_mesh
+      - name: Battery filter
+        run: g++ -std=c++11 -Wall -I.. test_battery.cpp -o test_battery && ./test_battery
